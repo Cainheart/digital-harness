@@ -47,6 +47,8 @@ describe("ReadinessPage", () => {
   it("does not expose an enabled real-execution action when readiness is blocked", async () => {
     render(<ReadinessPage />);
 
-    expect(await screen.findByRole("button", { name: "启动 Digital Harness" })).toBeDisabled();
+    expect(
+      await screen.findByRole("button", { name: "启动 Digital Harness" }),
+    ).toBeDisabled();
   });
 });

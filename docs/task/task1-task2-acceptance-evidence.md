@@ -1,8 +1,8 @@
 # Task 1 / Task 2 当前验收证据
 
 > 验证日期：2026-08-16
-> 当前分支：`codex/pytots`
-> 提交状态：按用户要求暂不创建 Task 分支提交，待确认后再提交到 `master`
+> 当前分支：`dev/task-3`；本文件记录 Task 1/2 能力在当前 Task 3 分支上的基线与重构回归结果。
+> 提交状态：本轮重构完成提交后更新提交哈希；当前不合并到 `master`
 
 ## 1. 验证命令
 
@@ -34,7 +34,7 @@ git diff --check：通过
 ## 2. 已验证结果
 
 - 后端 TypeScript 类型检查通过；
-- 后端 8 个测试文件、28 个测试通过；
+- 后端 11 个测试文件、49 个测试通过；
 - SQLite WAL、Schema 结构、迁移和迁移前二进制备份通过；
 - `0001_runtime_skeleton → 0002_task2_domain_foundation → 0003_task2_integrity_trace_fix` 升级路径通过；
 - Fastify readiness 包含 model、research、workspace、docker、persistence 五类检查；
@@ -63,10 +63,9 @@ git diff --check：通过
 
 ## 4. 尚未执行的交付动作
 
-按照用户当前指示，暂不执行以下动作：
+在验收和 Review 结论确认前，暂不执行以下动作：
 
 - 不切换到 `dev/task-1` 或 `dev/task-2`；
-- 不创建 Task 1 / Task 2 独立提交；
 - 不合并到 `master`。
 
-这些动作等待用户确认当前 `pytots` 分支内容后再执行。
+Task 1/2 不创建与当前业务分支割裂的独立提交；本轮重构统一在 `dev/task-3` 留痕。

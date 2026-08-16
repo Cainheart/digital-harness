@@ -26,7 +26,7 @@ npm test
 当前结果：
 
 - TypeScript 构建通过。
-- 10 个 Vitest 测试文件、45 个测试通过。
+- 11 个 Vitest 测试文件、49 个测试通过。
 - Task 3 相关测试覆盖：
   - 岗位职责字段为空时拒绝启用；
   - 五类领域、19 个员工实例和研发/NPI 办公室投影；
@@ -46,13 +46,13 @@ npm test
 
 | 编号 | 证据位置 | 结果 |
 | --- | --- | --- |
-| T3-AC-01 | `backend/src/domain/organization/definitions.ts`、`backend/tests/unit/task3-policy.test.ts` | 通过：完整性校验返回 `INVALID_ROLE_DEFINITION` |
-| T3-AC-02 | `backend/src/domain/organization/definitions.ts`、`backend/src/api/task3.ts`、`backend/tests/integration/task3-organization.test.ts` | 通过：五类领域、岗位、成员和办公室分区可查询 |
-| T3-AC-03 | `PolicyGate` 技术方案审批规则、Task 3 Policy Gate 测试 | 通过：PM 被拒绝并写策略审计 |
-| T3-AC-04 | `PolicyGate` Review 自审批规则、Task 3 Policy Gate 测试 | 通过：成员不能批准自己的 Review |
+| T3-AC-01 | `backend/src/domain/organization/definitions.ts`、`backend/tests/unit/policy-gate.test.ts` | 通过：完整性校验返回 `INVALID_ROLE_DEFINITION` |
+| T3-AC-02 | `backend/src/domain/organization/definitions.ts`、`backend/src/api/organization-routes.ts`、`backend/tests/integration/organization-message-policy.test.ts` | 通过：五类领域、岗位、成员和办公室分区可查询 |
+| T3-AC-03 | `PolicyGate` 技术方案审批规则、`backend/tests/unit/policy-gate.test.ts` | 通过：PM 被拒绝并写策略审计 |
+| T3-AC-04 | `PolicyGate` Review 自审批规则、`backend/tests/unit/policy-gate.test.ts` | 通过：成员不能批准自己的 Review |
 | T3-AC-05 | `parseCreateMessage`、消息集成测试 | 通过：422 且无业务事件 |
 | T3-AC-06 | `StructuredMessageRepository`、消息集成测试和 Boss 交接服务 | 通过：端点、任务、状态、处理时间、原始对象和响应任务可追踪；重复确认不重复事件 |
-| T3-AC-07 | 工具/路径/命令策略、Task 3 Policy Gate 测试 | 通过：写工具和 Keychain 越权拒绝并保存安全审计 |
+| T3-AC-07 | 工具/路径/命令策略、`backend/tests/unit/policy-gate.test.ts` | 通过：写工具和 Keychain 越权拒绝并保存安全审计 |
 | T3-AC-08 | `BossDirectionService`、Boss 方向集成测试 | 通过：Boss 方向转换为组长任务，不直接成为成员任务 |
 | T3-AC-09 | `execution_attempts.role_version`、`policy_snapshot_json`、Attempt 版本集成测试 | 通过：新旧 Attempt 策略版本隔离 |
 
@@ -75,6 +75,12 @@ npm test
 - 已逐项核对 PRD 5.1～5.3、6.3、7.3、7.5、8.1、8.3，需求矩阵 SR-ORG-001～011、SR-SCP-004、SR-OBJ-006、SR-APR-008、SR-COD-001/002/008、SR-SEC-008/010，以及概要设计中的 ExecutionGrant、Policy Gate、事件和 Schema 完整性约束。
 - Task 3 当前交付的是组织、岗位策略、结构化消息和 Boss 方向交接基础；完整的执行 Worker、Docker 真实执行、测试放行和项目主管通知编排仍属于后续 Task，不作为本次 Task 3 的未完成项。
 - 当前分支仍未合并到 `master`；只有验收和 Review 结论通过后才允许合并。
+
+## 本轮规范化重构补充
+
+- 生产代码和测试文件已按业务职责重命名并拆分路由；旧的 `task3.ts`、`task3-policy.test.ts` 和 `task3-organization.test.ts` 路径不再作为源码入口。
+- 统一补充运行时输入校验、稳定错误载荷、请求 trace、敏感字段脱敏、Artifact 内容寻址与项目绑定、迁移失败阻断、结构化审计和幂等边界。
+- 本轮回归命令增加 `npm run typecheck`、前端 `npm test -- --run` 和前端 `npm run build`；后端当前为 49/49，前端为 2/2。
 
 ## 分支交付
 

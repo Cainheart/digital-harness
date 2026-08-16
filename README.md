@@ -9,6 +9,14 @@ Digital Harness 是一个本地运行的 AI 数字研发 Harness 工程，目标
 - `docs/`：PRD、需求矩阵、概要设计、详细设计和任务拆分
 - `backend/tests/`：TypeScript 后端单元测试、集成测试和迁移生命周期测试
 
+源码按业务责任命名，不使用 `task1.ts`、`task2.ts`、`task3.ts` 这类任务编号作为生产代码文件名。当前 Task 1～3 的主要边界为：
+
+- `backend/src/api/`：事件、组织、结构化消息、Policy Gate 和请求输入校验；
+- `backend/src/application/`：命令事务协调、组织服务和 Boss 方向交接；
+- `backend/src/domain/`：实体、事件、消息、组织定义、错误和安全数据合同；
+- `backend/src/infra/`：SQLite migration、仓储、Artifact Store、Outbox、Keychain 和持久化根目录；
+- `backend/src/policy/`、`backend/src/readiness/`、`backend/src/lifecycle/`：策略门禁、启动准备和生命周期边界。
+
 ## Current implementation baseline
 
 - 运行时统一采用 Node.js 22 + TypeScript + Fastify。
@@ -16,6 +24,8 @@ Digital Harness 是一个本地运行的 AI 数字研发 Harness 工程，目标
 - 当前持久化 Schema 基线为 `0004_task3_organization_policy`，支持从 `0001_runtime_skeleton`、`0002_task2_domain_foundation` 和 `0003_task2_integrity_trace_fix` 按批准路径升级。
 - 后端源码位于 `backend/src/`，构建产物输出到 `backend/dist/`，运行时实现统一为 TypeScript。
 - Artifact Store、Outbox、幂等、TraceLink、持久化根目录、Keychain 适配器和 readiness/SSE 控制面已经迁移为 TypeScript。
+- 组织、结构化消息和策略接口已按业务职责拆分为独立路由与服务；所有外部输入经过运行时校验，异常、路径、凭据、迁移、并发幂等和项目范围边界均由后端统一处理。
+- 当前验证基线：后端 11 个测试文件、49 个测试通过；前端测试和生产构建通过。Task 4 及后续执行 Worker、完整工作流和 Electron 交付不在当前实现范围内。
 
 ## Development commands
 
