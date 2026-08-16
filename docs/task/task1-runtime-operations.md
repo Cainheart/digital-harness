@@ -38,7 +38,7 @@ npm run db:check
 | `DIGITAL_HARNESS_HOST` | `127.0.0.1` | 只允许回环地址，配置其他地址会被拒绝 |
 | `DIGITAL_HARNESS_PORT` | `8765` | Fastify sidecar 端口 |
 | `DIGITAL_HARNESS_APP_VERSION` | `0.1.0` | 写入 manifest 的应用版本 |
-| `DIGITAL_HARNESS_CURRENT_SCHEMA_REVISION` | 当前支持版本 | 当前为 `0003_task2_integrity_trace_fix` |
+| `DIGITAL_HARNESS_CURRENT_SCHEMA_REVISION` | 当前支持版本 | 当前为 `0004_task3_organization_policy` |
 | `DIGITAL_HARNESS_MODEL_PROVIDER` | `unconfigured` | readiness 展示用的模型提供商 |
 | `DIGITAL_HARNESS_MODEL_NAME` | `unconfigured` | readiness 展示用的模型名称 |
 | `DIGITAL_HARNESS_MODEL_SECRET_REF` | `keychain://unconfigured` | OS Keychain 引用，不是 API Key 明文 |
@@ -91,7 +91,7 @@ readiness 本身不启动模型、浏览器、Docker 容器、测试命令或工
 当前支持版本：
 
 ```text
-0003_task2_integrity_trace_fix
+0004_task3_organization_policy
 ```
 
 升级路径：
@@ -100,6 +100,7 @@ readiness 本身不启动模型、浏览器、Docker 容器、测试命令或工
 0001_runtime_skeleton
   → 0002_task2_domain_foundation
   → 0003_task2_integrity_trace_fix
+  → 0004_task3_organization_policy
 ```
 
 如果发现未知版本、缺失表、缺失索引、缺失 immutable trigger 或缺失完整性字段，应用保持只读阻断，不覆盖业务数据，并返回 `VERSION_CONFLICT` 或 `SCHEMA_INTEGRITY_CONFLICT`。

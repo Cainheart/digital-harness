@@ -1,7 +1,7 @@
 # Task 3：数字公司组织、岗位定义、结构化消息与执行策略
 
 > 任务编号：DEV-03
-> 任务状态：待开发
+> 任务状态：已完成开发与 Review，待验收
 > 任务类型：组织模型、角色边界、消息协议、策略和授权
 > 前置任务：task2.md
 > 后续消费者：task4.md、task5.md、task6.md、task7.md、task8.md、task9.md、task10.md
