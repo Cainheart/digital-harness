@@ -1,6 +1,6 @@
 /** 当前运行时要求的最后一个已验收持久化合同版本。 */
 export const SUPPORTED_SCHEMA_REVISION =
-  "0006_task4_workflow_hardening" as const;
+  "0007_task5_model_gateway" as const;
 
 /** 拒绝让配置、迁移目标和 readiness 使用不同的兼容基线。 */
 export function validateSchemaRevision(

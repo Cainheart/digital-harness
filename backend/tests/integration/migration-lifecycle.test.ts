@@ -94,6 +94,39 @@ describe("migration, schema guard and lifecycle", () => {
     second.close();
   });
 
+  it("upgrades a Task 4 hardening database to the Task 5 model gateway schema", () => {
+    const root = useTestRoot();
+    const first = new Database(join(root, "company.db"), {
+      persistentRoot: root,
+    });
+    first.initialize();
+    first.connection.exec(
+      "DROP INDEX ix_model_config_changes_domain_created; DROP INDEX ix_model_calls_domain_model; DROP INDEX ix_model_calls_trace_id; DROP TABLE model_config_changes; DROP TABLE model_configs; UPDATE drizzle_migrations SET version_num='0006_task4_workflow_hardening'",
+    );
+    first.close();
+
+    const second = new Database(join(root, "company.db"), {
+      persistentRoot: root,
+    });
+    second.initialize();
+    expect(second.currentRevision()).toBe(SUPPORTED_SCHEMA_REVISION);
+    expect(
+      (
+        second.connection
+          .prepare("SELECT COUNT(*) AS count FROM model_configs")
+          .get() as { count: number }
+      ).count,
+    ).toBe(5);
+    expect(
+      (
+        second.connection
+          .prepare("PRAGMA table_info(model_calls)")
+          .all() as { name: string }[]
+      ).some((column) => column.name === "redaction_status"),
+    ).toBe(true);
+    second.close();
+  });
+
   it("blocks a structurally incomplete database without treating it as ready", () => {
     const root = useTestRoot();
     const database = new Database(join(root, "company.db"), {

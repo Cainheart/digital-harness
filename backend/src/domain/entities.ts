@@ -282,6 +282,13 @@ export type ExecutionAttempt = {
   retryCount: number;
   traceId: string;
   version: number;
+  /** Task 5 在 Attempt 创建时复制的模型领域和供应商快照。 */
+  modelDomain?: string | null;
+  modelProvider?: string | null;
+  modelName?: string | null;
+  modelSecretRef?: string | null;
+  modelTimeoutMs?: number | null;
+  modelRetryMaxAttempts?: number | null;
 };
 /** 保存模型调用脱敏摘要、Token、成本、错误和 trace。 */
 export type ModelCall = {
@@ -302,6 +309,19 @@ export type ModelCall = {
   costMicros: number | null;
   traceId: string;
   version: number;
+  /** Task 5 调用观测的领域、配置版本和嵌套 span。 */
+  domain?: string;
+  configVersion?: number;
+  spanId?: string;
+  inputSummary?: string;
+  outputSummary?: string;
+  timeoutMs?: number | null;
+  timedOut?: boolean;
+  retryCount?: number;
+  artifactRef?: string | null;
+  redactionStatus?: string;
+  finalStatus?: string;
+  totalTokens?: number | null;
 };
 /** 保存工具调用脱敏摘要、耗时、错误和 trace。 */
 export type ToolCall = {

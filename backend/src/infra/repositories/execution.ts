@@ -23,7 +23,7 @@ export class ExecutionRepository {
     ensureProjectChild(connection, "tasks", attempt.projectId, attempt.taskId);
     connection
       .prepare(
-        "INSERT INTO execution_attempts (id,project_id,task_id,role,model_config_version,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO execution_attempts (id,project_id,task_id,role,model_config_version,model_domain,model_provider,model_name,model_secret_ref,model_timeout_ms,model_retry_max_attempts,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         attempt.id,
@@ -31,6 +31,12 @@ export class ExecutionRepository {
         attempt.taskId,
         attempt.role,
         attempt.modelConfigVersion,
+        attempt.modelDomain ?? null,
+        attempt.modelProvider ?? null,
+        attempt.modelName ?? null,
+        attempt.modelSecretRef ?? null,
+        attempt.modelTimeoutMs ?? null,
+        attempt.modelRetryMaxAttempts ?? null,
         attempt.workspaceRef,
         attempt.workerLeaseId,
         attempt.status,
@@ -53,7 +59,7 @@ export class ExecutionRepository {
     );
     connection
       .prepare(
-        "INSERT INTO model_calls (id,project_id,task_id,execution_attempt_id,role,provider,model,started_at,ended_at,duration_ms,summary,error_code,input_tokens,output_tokens,cost_micros,trace_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO model_calls (id,project_id,task_id,execution_attempt_id,role,provider,model,started_at,ended_at,duration_ms,summary,error_code,input_tokens,output_tokens,cost_micros,trace_id,created_at,domain,config_version,span_id,input_summary,output_summary,timeout_ms,timed_out,retry_count,artifact_ref,redaction_status,final_status,total_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         call.id,
@@ -73,6 +79,18 @@ export class ExecutionRepository {
         call.costMicros,
         call.traceId,
         call.startedAt,
+        call.domain ?? "product",
+        call.configVersion ?? 0,
+        call.spanId ?? "",
+        call.inputSummary ?? "",
+        call.outputSummary ?? "",
+        call.timeoutMs ?? null,
+        call.timedOut ? 1 : 0,
+        call.retryCount ?? 0,
+        call.artifactRef ?? null,
+        call.redactionStatus ?? "passed",
+        call.finalStatus ?? "finished",
+        call.totalTokens ?? (call.inputTokens ?? 0) + (call.outputTokens ?? 0),
       );
   }
   /** 创建脱敏工具调用记录。 */
@@ -189,6 +207,12 @@ type AttemptRow = {
   retry_count: number;
   trace_id: string;
   version: number;
+  model_domain: string | null;
+  model_provider: string | null;
+  model_name: string | null;
+  model_secret_ref: string | null;
+  model_timeout_ms: number | null;
+  model_retry_max_attempts: number | null;
 };
 type ModelCallRow = {
   id: string;
@@ -208,6 +232,18 @@ type ModelCallRow = {
   cost_micros: number | null;
   trace_id: string;
   created_at: string;
+  domain: string;
+  config_version: string;
+  span_id: string;
+  input_summary: string;
+  output_summary: string;
+  timeout_ms: number | null;
+  timed_out: number;
+  retry_count: number;
+  artifact_ref: string | null;
+  redaction_status: string;
+  final_status: string;
+  total_tokens: number | null;
 };
 type ToolCallRow = {
   id: string;
@@ -256,6 +292,12 @@ function attemptFromRow(row: AttemptRow): ExecutionAttempt {
     retryCount: row.retry_count,
     traceId: row.trace_id,
     version: row.version,
+    modelDomain: row.model_domain,
+    modelProvider: row.model_provider,
+    modelName: row.model_name,
+    modelSecretRef: row.model_secret_ref,
+    modelTimeoutMs: row.model_timeout_ms,
+    modelRetryMaxAttempts: row.model_retry_max_attempts,
   };
 }
 function modelCallFromRow(row: ModelCallRow): ModelCall {
@@ -277,6 +319,18 @@ function modelCallFromRow(row: ModelCallRow): ModelCall {
     costMicros: row.cost_micros,
     traceId: row.trace_id,
     version: 1,
+    domain: row.domain,
+    configVersion: Number(row.config_version),
+    spanId: row.span_id,
+    inputSummary: row.input_summary,
+    outputSummary: row.output_summary,
+    timeoutMs: row.timeout_ms,
+    timedOut: Boolean(row.timed_out),
+    retryCount: row.retry_count,
+    artifactRef: row.artifact_ref,
+    redactionStatus: row.redaction_status,
+    finalStatus: row.final_status,
+    totalTokens: row.total_tokens,
   };
 }
 function toolCallFromRow(row: ToolCallRow): ToolCall {
