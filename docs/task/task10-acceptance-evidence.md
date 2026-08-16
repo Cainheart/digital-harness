@@ -60,4 +60,5 @@ git diff --check
 
 ## 本地提交状态
 
-本文件用于记录完成提交后的本地 commit；提交前不执行 push。最终 commit hash 在本地提交完成后补写。
+完成提交：`917fa89`（`feat(task10): deliver observability office scorecard and backup restore`）。
+本次提交只存在于本地 `dev_task10` 分支；未执行 push。
