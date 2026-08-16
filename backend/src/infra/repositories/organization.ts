@@ -1,6 +1,6 @@
 import BetterSqlite3 from "better-sqlite3";
-import { assertCompleteRoleDefinition, canonicalRoleId, OrganizationDomain, OrganizationMember, OrganizationSeed, RoleDefinition, safeRoleId } from "../../domain/organization/definitions.js";
-import { NotFoundError } from "../../domain/errors.js";
+import { assertCompleteRoleDefinition, canonicalRoleId, OrganizationDomain, OrganizationMember, OrganizationSeed, RoleDefinition } from "../../domain/organization/definitions.js";
+import { InvalidRoleDefinitionError, NotFoundError } from "../../domain/errors.js";
 import { jsonText, jsonValue } from "./common.js";
 
 /** 组织、岗位和员工实例的 SQLite 仓储；所有岗位读取都经过完整性校验。 */
@@ -12,9 +12,11 @@ export class OrganizationRepository {
   /** 按岗位 ID 查询岗位，兼容 role_ 前缀的设计文档示例。 */
   getRole(connection: BetterSqlite3.Database, roleId: string): RoleDefinition { const row = connection.prepare("SELECT * FROM role_definitions WHERE role_id=?").get(canonicalRoleId(roleId)) as RoleRow | undefined; if (!row) throw new NotFoundError("岗位不存在"); const role = roleFromRow(row); if (!role.enabled) throw new NotFoundError("岗位当前未启用"); return role; }
   /** 查询员工实例；岗位版本从实例快照中恢复，供执行授权建立稳定边界。 */
-  getMember(connection: BetterSqlite3.Database, instanceId: string): OrganizationMember { const row = connection.prepare("SELECT * FROM organization_members WHERE instance_id=?").get(instanceId) as MemberRow | undefined; if (!row) throw new NotFoundError("员工实例不存在"); return memberFromRow(row); }
+  // 修改日期：2026-08-16
+  // 修改原因：禁用岗位或过期员工岗位快照不能继续作为消息端点或 Boss 方向接收人，必须在读取时阻断而不是等执行阶段失败。
+  getMember(connection: BetterSqlite3.Database, instanceId: string): OrganizationMember { const row = connection.prepare("SELECT organization_members.*, role_definitions.enabled AS role_enabled, role_definitions.role_version AS current_role_version FROM organization_members JOIN role_definitions ON role_definitions.role_id=organization_members.role_id WHERE organization_members.instance_id=?").get(instanceId) as MemberRow | undefined; if (!row) throw new NotFoundError("员工实例不存在"); if (row.role_enabled !== 1 || row.current_role_version !== row.role_version) throw new InvalidRoleDefinitionError("员工实例关联的岗位当前不可执行", { data: { instanceId, roleId: row.role_id } }); return memberFromRow(row); }
   /** 查询全部员工实例，用于组织图和办公室投影。 */
-  listMembers(connection: BetterSqlite3.Database): OrganizationMember[] { return (connection.prepare("SELECT * FROM organization_members ORDER BY instance_id").all() as MemberRow[]).map(memberFromRow); }
+  listMembers(connection: BetterSqlite3.Database): OrganizationMember[] { return (connection.prepare("SELECT organization_members.* FROM organization_members JOIN role_definitions ON role_definitions.role_id=organization_members.role_id WHERE role_definitions.enabled=1 AND role_definitions.role_version=organization_members.role_version ORDER BY instance_id").all() as MemberRow[]).map(memberFromRow); }
   /** 以当前数据库内容构造组织查询结果。 */
   getOrganization(connection: BetterSqlite3.Database, seed: OrganizationSeed): OrganizationSeed { return { domains: this.listDomains(connection), roles: this.listRoles(connection), members: this.listMembers(connection), bossDecisionBoundary: [...seed.bossDecisionBoundary], version: seed.version }; }
   /** 启用岗位前校验所有职责、工具、对象和路径字段均非空。 */
@@ -32,7 +34,7 @@ type DomainRow = { domain_id: string; display_name: string; office_zone: string;
 /** 保存 role_definitions 的 SQLite 行形状。 */
 type RoleRow = { role_id: string; domain_id: string; title: string; objective: string; responsibilities_json: string; inputs_json: string; outputs_json: string; allowed_tools_json: string; visible_objects_json: string; allowed_objects_json: string; forbidden_actions_json: string; object_actions_json: string; path_policy_json: string; command_policy_json: string; role_version: number; enabled: number };
 /** 保存 organization_members 的 SQLite 行形状。 */
-type MemberRow = { instance_id: string; role_id: string; display_name: string; specialist_tag: string; office_zone: string; desk_group: string; status: "available" | "busy" | "blocked"; role_version: number };
+type MemberRow = { instance_id: string; role_id: string; display_name: string; specialist_tag: string; office_zone: string; desk_group: string; status: "available" | "busy" | "blocked"; role_version: number; role_enabled?: number; current_role_version?: number };
 /** 将领域行恢复为组织查询模型。 */
 function domainFromRow(row: DomainRow): OrganizationDomain { return { domainId: row.domain_id as OrganizationDomain["domainId"], displayName: row.display_name, officeZone: row.office_zone, groupName: row.group_name, responsibilities: jsonValue<string[]>(row.responsibilities_json), version: row.version }; }
 /** 将岗位行恢复为严格岗位定义并重新执行完整性校验。 */

@@ -14,6 +14,8 @@ export const TASK2_TABLES = new Set<string>(TASK2_TABLE_ORDER);
 export const TASK3_TABLE_ORDER = ["organization_domains", "role_definitions", "organization_members", "structured_messages", "policy_decisions"] as const;
 /** 用于启动完整性检查的 Task 3 表集合。 */
 export const TASK3_TABLES = new Set<string>(TASK3_TABLE_ORDER);
+/** Task 3 的复合查询索引；组织、消息和策略审计都依赖这些索引保持可追踪查询。 */
+export const TASK3_INDEX_DEFINITIONS = [["structured_messages", "ix_structured_messages_project_task", "project_id,task_id"], ["policy_decisions", "ix_policy_decisions_project_task", "project_id,task_id"], ["organization_members", "ix_organization_members_role", "role_id"]] as const;
 export const PROJECT_SCOPED_TABLE_NAMES = ["tasks", "task_dependencies", "artifacts", "artifact_versions", "approvals", "reviews", "test_cases", "test_runs", "defects", "execution_attempts", "model_calls", "tool_calls", "notifications", "domain_events", "outbox_messages", "idempotency_records", "trace_links"] as const;
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries([...PROJECT_SCOPED_TABLE_NAMES, "project_deletion_audits"].map((name) => [name, `ix_${name}_project_id`])) as Record<string, string>;
 
@@ -153,7 +155,7 @@ export function migrate0004(db: BetterSqlite3.Database): void {
   const attemptColumns = db.prepare("PRAGMA table_info(execution_attempts)").all() as { name: string }[];
   if (!attemptColumns.some((column) => column.name === "role_version")) db.exec("ALTER TABLE execution_attempts ADD COLUMN role_version INTEGER NOT NULL DEFAULT 1 CHECK (role_version >= 1)");
   if (!attemptColumns.some((column) => column.name === "policy_snapshot_json")) db.exec("ALTER TABLE execution_attempts ADD COLUMN policy_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(policy_snapshot_json) = 1)");
-  for (const [table, index] of [["structured_messages", "ix_structured_messages_project_task"], ["policy_decisions", "ix_policy_decisions_project_task"], ["organization_members", "ix_organization_members_role"]] as const) db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${table === "structured_messages" ? "project_id,task_id" : table === "policy_decisions" ? "project_id,task_id" : "role_id"})`);
+  for (const [table, index, columns] of TASK3_INDEX_DEFINITIONS) db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
   seedOrganization(db);
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run("0004_task3_organization_policy");
 }

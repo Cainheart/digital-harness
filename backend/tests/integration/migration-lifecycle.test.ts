@@ -49,6 +49,17 @@ describe("migration, schema guard and lifecycle", () => {
     database.close();
   });
 
+  it("blocks a Task 3 database when a message trace index is missing", () => {
+    const root = useTestRoot();
+    const database = new Database(join(root, "company.db"), { persistentRoot: root });
+    database.initialize();
+    database.connection.prepare("DROP INDEX ix_structured_messages_project_task").run();
+    const result = database.checkSchema();
+    expect(result.writable).toBe(false);
+    expect(result.code).toBe("SCHEMA_INTEGRITY_CONFLICT");
+    database.close();
+  });
+
   it("records ApplicationStarted/ApplicationStopped through Fastify lifecycle hooks", async () => {
     const root = useTestRoot();
     const app = await createTestApp(root);

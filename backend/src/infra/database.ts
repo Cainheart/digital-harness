@@ -7,7 +7,7 @@ import { RuntimeBoundaryError } from "../api/errors.js";
 import { SUPPORTED_SCHEMA_REVISION, validateSchemaRevision } from "../config/schema-revision.js";
 import { ProjectStatus } from "../domain/common.js";
 import { NotFoundError, ReadOnlyProjectError } from "../domain/errors.js";
-import { migrate0001, migrate0002, migrate0003, migrate0004, PROJECT_ID_INDEX_NAMES, TASK1_TABLES, TASK2_TABLES, TASK3_TABLES, renderImmutableTrigger, renderTraceLinkTrigger } from "./schema.js";
+import { migrate0001, migrate0002, migrate0003, migrate0004, PROJECT_ID_INDEX_NAMES, TASK1_TABLES, TASK2_TABLES, TASK3_INDEX_DEFINITIONS, TASK3_TABLES, renderImmutableTrigger, renderTraceLinkTrigger } from "./schema.js";
 
 /** 迁移前置备份上下文；仅批准回执才能解除 0001 -> 0002 阻断。 */
 export type MigrationBackupContext = { persistentRoot: string; databasePath: string; appVersion: string; sourceSchemaRevision: string; targetSchemaRevision: string };
@@ -165,7 +165,41 @@ export class Database {
   projectExists(projectId: string): boolean { return Boolean(this.connection.prepare("SELECT 1 FROM projects WHERE id=?").get(projectId)); }
 
   private validateStorageDirectories(): void { for (const name of ["artifacts", "traces", "workspaces", "backups"]) { const path = join(this.persistentRoot, name); validateNoFollowPath(path); if (existsSync(path) && !lstatSync(path).isDirectory()) throw new Error(`unsafe persistent directory: ${name}`); } for (const path of [this.path, `${this.path}-wal`, `${this.path}-shm`, join(this.persistentRoot, "manifest.json")]) { validateNoFollowPath(path); if (existsSync(path) && !lstatSync(path).isFile()) throw new Error(`unsafe persistent file: ${path}`); } }
-  private ensureSchemaContract(): void { const tables = this.tableNames(); const required = new Set([...TASK1_TABLES, ...TASK2_TABLES, ...TASK3_TABLES, "drizzle_migrations"]); if (![...required].every((name) => tables.has(name))) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复完整 Schema 或沿批准 migration 修复后重试", "SCHEMA_INTEGRITY_CONFLICT"); const artifactVersionColumns = this.connection.prepare("PRAGMA table_info(artifact_versions)").all() as { name: string }[]; if (!artifactVersionColumns.some((column) => column.name === "integrity_status")) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复 artifact_versions.integrity_status 后重试", "SCHEMA_INTEGRITY_CONFLICT"); const eventColumns = this.connection.prepare("PRAGMA table_info(domain_events)").all() as { name: string }[]; for (const column of ["attempt_id", "rejection_reason", "redaction_reason", "event_category"]) if (!eventColumns.some((item) => item.name === column)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 domain_events.${column} 后重试`, "SCHEMA_INTEGRITY_CONFLICT"); const attemptColumns = this.connection.prepare("PRAGMA table_info(execution_attempts)").all() as { name: string }[]; for (const column of ["role_version", "policy_snapshot_json"]) if (!attemptColumns.some((item) => item.name === column)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 execution_attempts.${column} 后重试`, "SCHEMA_INTEGRITY_CONFLICT"); const triggers = this.connection.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[]; const names = new Set(triggers.map((row) => row.name)); for (const name of ["trg_domain_events_immutable_update", "trg_domain_events_immutable_delete", "trg_artifact_versions_immutable_update", "trg_artifact_versions_immutable_delete", "trg_trace_links_project_scope_insert", "trg_trace_links_project_scope_update"]) if (!names.has(name)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复关键 immutable/TraceLink trigger 后重试", "SCHEMA_INTEGRITY_CONFLICT"); for (const [table, index] of Object.entries(PROJECT_ID_INDEX_NAMES)) { const found = this.connection.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(index); if (!found) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 ${table}.project_id 索引后重试`, "SCHEMA_INTEGRITY_CONFLICT"); } }
+  // 修改日期：2026-08-16
+  // 修改原因：Task 3 的表存在但缺字段/复合索引时，旧检查会误判数据库可写，直到业务请求才以 500 暴露；启动时必须提前阻断并保护已有数据。
+  private ensureSchemaContract(): void {
+    const tables = this.tableNames();
+    const required = new Set([...TASK1_TABLES, ...TASK2_TABLES, ...TASK3_TABLES, "drizzle_migrations"]);
+    if (![...required].every((name) => tables.has(name))) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复完整 Schema 或沿批准 migration 修复后重试", "SCHEMA_INTEGRITY_CONFLICT");
+    const requiredColumns: Record<string, string[]> = {
+      organization_domains: ["domain_id", "display_name", "office_zone", "group_name", "responsibilities_json", "version", "enabled"],
+      role_definitions: ["role_id", "domain_id", "title", "objective", "responsibilities_json", "inputs_json", "outputs_json", "allowed_tools_json", "visible_objects_json", "allowed_objects_json", "forbidden_actions_json", "object_actions_json", "path_policy_json", "command_policy_json", "role_version", "enabled", "created_at", "updated_at"],
+      organization_members: ["instance_id", "role_id", "display_name", "specialist_tag", "office_zone", "desk_group", "status", "role_version", "created_at"],
+      structured_messages: ["message_id", "sender_role", "sender_instance_id", "receiver_role", "receiver_instance_id", "project_id", "task_id", "message_type", "payload_json", "created_at", "status", "handled_at", "handled_by", "source_object_type", "source_object_id", "response_object_type", "response_object_id", "trace_id", "idempotency_key", "version", "request_hash"],
+      policy_decisions: ["decision_id", "project_id", "task_id", "attempt_id", "role_id", "role_version", "action_kind", "object_type", "object_id", "tool_name", "decision", "reason", "risk_level", "trace_id", "action_json", "created_at"],
+    };
+    for (const [table, columns] of Object.entries(requiredColumns)) this.ensureColumns(table, columns);
+    const counts = this.connection.prepare("SELECT (SELECT COUNT(*) FROM organization_domains) AS domains, (SELECT COUNT(*) FROM role_definitions) AS roles, (SELECT COUNT(*) FROM organization_members) AS members").get() as { domains: number; roles: number; members: number };
+    if (counts.domains < 5 || counts.roles < 19 || counts.members < 19) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复 Task 3 五类领域、19 个岗位和 19 个员工实例后重试", "SCHEMA_INTEGRITY_CONFLICT");
+    const artifactVersionColumns = this.connection.prepare("PRAGMA table_info(artifact_versions)").all() as { name: string }[];
+    if (!artifactVersionColumns.some((column) => column.name === "integrity_status")) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复 artifact_versions.integrity_status 后重试", "SCHEMA_INTEGRITY_CONFLICT");
+    const eventColumns = this.connection.prepare("PRAGMA table_info(domain_events)").all() as { name: string }[];
+    for (const column of ["attempt_id", "rejection_reason", "redaction_reason", "event_category"]) if (!eventColumns.some((item) => item.name === column)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 domain_events.${column} 后重试`, "SCHEMA_INTEGRITY_CONFLICT");
+    const attemptColumns = this.connection.prepare("PRAGMA table_info(execution_attempts)").all() as { name: string }[];
+    for (const column of ["role_version", "policy_snapshot_json"]) if (!attemptColumns.some((item) => item.name === column)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 execution_attempts.${column} 后重试`, "SCHEMA_INTEGRITY_CONFLICT");
+    const triggers = this.connection.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[];
+    const names = new Set(triggers.map((row) => row.name));
+    for (const name of ["trg_domain_events_immutable_update", "trg_domain_events_immutable_delete", "trg_artifact_versions_immutable_update", "trg_artifact_versions_immutable_delete", "trg_trace_links_project_scope_insert", "trg_trace_links_project_scope_update"]) if (!names.has(name)) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, "恢复关键 immutable/TraceLink trigger 后重试", "SCHEMA_INTEGRITY_CONFLICT");
+    for (const [table, index] of Object.entries(PROJECT_ID_INDEX_NAMES)) { const found = this.connection.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(index); if (!found) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 ${table}.project_id 索引后重试`, "SCHEMA_INTEGRITY_CONFLICT"); }
+    for (const [table, index, columns] of TASK3_INDEX_DEFINITIONS) { const found = this.connection.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(index); const actualColumns = (this.connection.prepare(`PRAGMA index_info(${index})`).all() as { seq: number; name: string }[]).sort((left, right) => left.seq - right.seq).map((column) => column.name).join(","); if (!found || actualColumns !== columns) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 ${table} 的 Task 3 查询索引后重试`, "SCHEMA_INTEGRITY_CONFLICT"); }
+  }
+
+  /** 检查单张表的字段合同，避免迁移只留下半成品表结构。 */
+  private ensureColumns(table: string, columns: string[]): void {
+    const actual = new Set((this.connection.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((column) => column.name));
+    const missing = columns.filter((column) => !actual.has(column));
+    if (missing.length > 0) throw this.schemaConflict(SUPPORTED_SCHEMA_REVISION, `恢复 ${table}.${missing.join(",")} 后重试`, "SCHEMA_INTEGRITY_CONFLICT");
+  }
   private schemaConflict(revision: string | null, nextAction: string, code = "VERSION_CONFLICT"): RuntimeBoundaryError { return runtimeError(code, code === "VERSION_CONFLICT" ? "VERSION_CONFLICT: 当前数据库 Schema revision 不兼容" : "Schema revision 不兼容或结构完整性校验失败；数据库保持只读阻断", nextAction, revision ?? undefined); }
   private persistenceError(code: string, nextAction: string): RuntimeBoundaryError { return runtimeError(code, code === "MIGRATION_BACKUP_FAILED" ? "迁移前一致性备份未通过验证" : "持久化数据库当前不可用或 Schema migration 未完成", nextAction); }
   /**

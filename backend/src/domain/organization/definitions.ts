@@ -43,13 +43,24 @@ export function canonicalRoleId(roleId: string): string { return roleId.startsWi
 
 /** 对岗位定义执行启用前完整性检查，避免空字段进入任务分派。 */
 export function assertCompleteRoleDefinition(role: RoleDefinition): RoleDefinition {
+  const validDomains = new Set<OrganizationDomainId>(["product", "development", "npi", "testing", "project_management"]);
+  const validTools = new Set<ToolName>(["research.search", "research.open", "file.read", "file.write", "command.run", "test.run", "evidence.write", "message.send", "keychain.read"]);
+  const validObjectActions = new Set<ObjectAction>(["read", "create", "update", "approve"]);
   const requiredText: Array<keyof RoleDefinition> = ["roleId", "domain", "title", "objective"];
   for (const field of requiredText) if (typeof role[field] !== "string" || !String(role[field]).trim()) throw new InvalidRoleDefinitionError(`岗位字段 ${String(field)} 不能为空`, { data: { roleId: role.roleId, missingField: field } });
+  try { validateSafeValue(role.roleId, "roleId"); } catch { throw new InvalidRoleDefinitionError("岗位 roleId 不符合安全格式", { data: { roleId: role.roleId, missingField: "roleId" } }); }
+  if (!validDomains.has(role.domain)) throw new InvalidRoleDefinitionError("岗位 domain 不在五类责任领域内", { data: { roleId: role.roleId, invalidField: "domain" } });
   const requiredArrays: Array<keyof RoleDefinition> = ["responsibilities", "inputs", "outputs", "allowedTools", "visibleObjects", "allowedObjects", "forbiddenActions"];
   for (const field of requiredArrays) { const value = role[field]; if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) throw new InvalidRoleDefinitionError(`岗位字段 ${String(field)} 不能为空`, { data: { roleId: role.roleId, missingField: field } }); }
+  if (role.allowedTools.some((tool) => !validTools.has(tool))) throw new InvalidRoleDefinitionError("岗位包含未定义工具", { data: { roleId: role.roleId, invalidField: "allowedTools" } });
+  if (!role.objectActions || typeof role.objectActions !== "object" || Array.isArray(role.objectActions) || Object.keys(role.objectActions).length === 0 || Object.entries(role.objectActions).some(([objectType, actions]) => !objectType.trim() || !Array.isArray(actions) || actions.length === 0 || actions.some((action) => !validObjectActions.has(action)))) throw new InvalidRoleDefinitionError("岗位对象策略不完整或包含未定义动作", { data: { roleId: role.roleId, invalidField: "objectActions" } });
+  if (!role.pathPolicy || !Array.isArray(role.pathPolicy.readRoots) || !Array.isArray(role.pathPolicy.writeRoots) || role.pathPolicy.readRoots.length === 0 || role.pathPolicy.readRoots.some((path) => typeof path !== "string" || !path.trim()) || role.pathPolicy.writeRoots.some((path) => typeof path !== "string" || !path.trim())) throw new InvalidRoleDefinitionError("岗位路径策略不完整", { data: { roleId: role.roleId, invalidField: "pathPolicy" } });
+  if (!role.commandPolicy || !Array.isArray(role.commandPolicy.allowedCommands) || !Array.isArray(role.commandPolicy.forbiddenCommands) || role.commandPolicy.allowedCommands.length === 0 || role.commandPolicy.allowedCommands.some((command) => typeof command !== "string" || !command.trim()) || role.commandPolicy.forbiddenCommands.some((command) => typeof command !== "string" || !command.trim())) throw new InvalidRoleDefinitionError("岗位命令策略不完整", { data: { roleId: role.roleId, invalidField: "commandPolicy" } });
   if (!Number.isInteger(role.roleVersion) || role.roleVersion < 1) throw new InvalidRoleDefinitionError("岗位 roleVersion 必须是正整数", { data: { roleId: role.roleId, missingField: "roleVersion" } });
-  if (!role.pathPolicy.readRoots.length || !role.commandPolicy.allowedCommands.length) throw new InvalidRoleDefinitionError("岗位路径和命令策略不能为空", { data: { roleId: role.roleId, missingField: "pathPolicy/commandPolicy" } });
-  assertSafeData(role);
+  if (typeof role.enabled !== "boolean") throw new InvalidRoleDefinitionError("岗位 enabled 必须是布尔值", { data: { roleId: role.roleId, invalidField: "enabled" } });
+  // 修改日期：2026-08-16
+  // 修改原因：岗位配置可能来自数据库或管理端输入；敏感字段/控制字符必须稳定映射为 INVALID_ROLE_DEFINITION，不能以未处理异常穿透 API。
+  try { assertSafeData(role); } catch { throw new InvalidRoleDefinitionError("岗位定义包含敏感字段或不安全内容", { data: { roleId: role.roleId, invalidField: "security" } }); }
   return role;
 }
 
