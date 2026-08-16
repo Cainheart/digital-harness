@@ -4,11 +4,12 @@
 
 - 任务：DEV-08，开发 Review、测试执行、缺陷流转与 NPI 回归。
 - 本地分支：`dev_task8`。
-- 分支基线：从当时最新本地 `master` 创建；未 push 到 GitHub，未合并回 `master`。
+- 分支基线：从当时最新本地 `master` 创建。
 - 完成提交：`55ac831`（`feat(task8): implement quality flow`）。
+- GitHub 推送：用户确认后以普通快进方式将 `dev_task8` 推送到远端 `master`，当前远端提交为 `7d51731`。
 - Schema revision：`0010_task8_quality_flow`。
 
-说明：`task8.md` 中的通用示例使用 `dev/task-8`，本次按用户明确指定的本地分支名 `dev_task8` 执行；未进行远端写入。
+说明：`task8.md` 中的通用示例使用 `dev/task-8`，本次按用户明确指定的分支名 `dev_task8` 执行。首次 Task 8 开发阶段未进行远端写入；在验收完成后按用户后续指令完成了远端 `master` 快进推送。
 
 ## 2. 实现与设计对照
 
@@ -37,7 +38,7 @@
 | T8-AC-10 | 首次回归失败后缺陷回到 `open`，第二次修复和真实回归通过后关闭。 |
 | T8-AC-11 | 未关闭 P0/P1 缺陷使测试报告 `releaseAllowed=false`；关闭后才允许放行。 |
 | T8-AC-12 | 集成测试检查任务、用例、TestRun、Defect、NPI、Fix、RegressionRequest、RegressionResult 的 TraceLink 目标均存在。 |
-| T8-AC-COMMIT | 当前分支为 `dev_task8`，完成提交为 `55ac831`；无远端 push、无 master 合并。 |
+| T8-AC-COMMIT | 当前分支为 `dev_task8`，实现提交为 `55ac831`，验收文档提交为 `7d51731`；`origin/master` 已快进到 `7d51731`，未使用强制 push。 |
 
 ## 4. 实际验证记录
 
@@ -69,4 +70,4 @@ git diff --check
 4. 历史失败 TestRun 不能永久阻断已完成回归的放行；报告改按每个用例的最新 TestRun 判断当前结果，同时保留全部历史失败统计。
 5. 质量对象追踪链已纳入 TraceLink trigger 和项目范围校验，并覆盖 Review、NPI、Fix、RegressionRequest、RegressionResult。
 
-工作区在验收证据提交后应保持 clean；本分支只保存在本地，等待后续人工决定是否合并。
+工作区在验收证据提交后保持 clean；`dev_task8` 保留为本地开发分支，GitHub `master` 已包含 Task 8 的完成提交和验收证据。
