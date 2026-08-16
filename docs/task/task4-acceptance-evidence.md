@@ -7,7 +7,7 @@
 - 分支基线：从当时最新本地 `master` 创建，基线提交为 `125b5ad`（`docs: record task-3 master merge`）。
 - 远程操作：按本次开发要求，仅保存在本地，未 push 到 GitHub；也未合并回 `master`。
 - 与 Task 文档的差异：`docs/task/task4.md` 的通用准则要求使用 `dev/task-4` 并 push；本次以用户明确指定的 `dev_task4` 和“暂存本地、不 push”为准，属于已记录的交付流程偏差，不改变代码契约。
-- 完成提交哈希：待本地完成提交后回填。
+- 完成提交哈希：`caec151`（`feat(task-4): complete workflow governance`）。
 
 ## 2. 需求与设计追踪
 
@@ -93,4 +93,4 @@ git diff --check
 - 验收状态：通过本地自动化测试、类型检查、构建和代码审查。
 - Review 状态：通过；无开放 P0/P1 finding。
 - 合并状态：未合并到 `master`，符合本次“仅本地暂存、不 push”的要求。
-- 完成提交哈希：待本地完成提交后回填。
+- 完成提交哈希：`caec151`（`feat(task-4): complete workflow governance`）。
