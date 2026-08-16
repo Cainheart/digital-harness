@@ -1,8 +1,8 @@
 # Task 3 验收证据
 
-> 任务：DEV-03；当前分支：`dev/task-3`；基线：`0004_task3_organization_policy`
+> 任务：DEV-03；当前分支：`master`；来源分支：`dev/task-3`；基线：`0004_task3_organization_policy`
 > 
-> 完成提交哈希：`7aa3c6a`（基础实现）、`abd3759`（Review 修复：`fix(task-3): harden policy and message boundaries`）、`7d1cda4`（按最新代码开发规范完成 Task 1～3 统一重构）；本分支未合并到 `master`。
+> 完成提交哈希：`7aa3c6a`（基础实现）、`abd3759`（Review 修复：`fix(task-3): harden policy and message boundaries`）、`7d1cda4`（按最新代码开发规范完成 Task 1～3 统一重构）；已合并到 `master`，合并提交为 `fbe9849`。
 
 ## 实现范围
 
@@ -74,7 +74,7 @@ npm test
 
 - 已逐项核对 PRD 5.1～5.3、6.3、7.3、7.5、8.1、8.3，需求矩阵 SR-ORG-001～011、SR-SCP-004、SR-OBJ-006、SR-APR-008、SR-COD-001/002/008、SR-SEC-008/010，以及概要设计中的 ExecutionGrant、Policy Gate、事件和 Schema 完整性约束。
 - Task 3 当前交付的是组织、岗位策略、结构化消息和 Boss 方向交接基础；完整的执行 Worker、Docker 真实执行、测试放行和项目主管通知编排仍属于后续 Task，不作为本次 Task 3 的未完成项。
-- 当前分支仍未合并到 `master`；只有验收和 Review 结论通过后才允许合并。
+- 验收和 Review 结论已通过，`dev/task-3` 已合并到 `master`；合并提交为 `fbe9849`。
 
 ## 本轮规范化重构补充
 
@@ -87,4 +87,4 @@ npm test
 - 开发分支：`dev/task-3`。
 - 完成提交：`7aa3c6a`、`abd3759`、`7d1cda4`。
 - Review：已完成；发现项已在 `abd3759` 修复，本轮规范化重构在 `7d1cda4` 完成，回归测试 49/49 通过。
-- 合并到 `master`：验收和 Review 通过后再执行；当前未合并。
+- 合并到 `master`：已完成，合并提交为 `fbe9849`。
