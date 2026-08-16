@@ -39,6 +39,7 @@ import { registerMessageRoutes } from "./api/message-routes.js";
 import { registerPolicyRoutes } from "./api/policy-routes.js";
 import { createRequestTraceId } from "./api/request-trace.js";
 import { DomainError } from "./domain/errors.js";
+import { registerWorkflowRoutes } from "./api/workflow-routes.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -202,6 +203,7 @@ export function createApp(options: {
   registerOrganizationRoutes(app, { testMode });
   registerMessageRoutes(app, { testMode });
   registerPolicyRoutes(app, { testMode });
+  registerWorkflowRoutes(app, { testMode });
   return app;
 }
 

@@ -25,6 +25,7 @@ export class SqliteEventStore {
     aggregateId: string,
     expectedVersion: number,
     drafts: DomainEventDraft[],
+    allowReadOnlyProject = false,
   ): AppendResult {
     if (drafts.length === 0)
       throw new InvalidArgumentError(
@@ -99,6 +100,7 @@ export class SqliteEventStore {
         eventId: event.eventId,
         topic: event.eventType,
         payload: event.payload,
+        allowReadOnlyProject,
       });
       events.push(event);
     }

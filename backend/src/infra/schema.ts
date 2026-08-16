@@ -46,6 +46,11 @@ export const DOMAIN_TABLE_ORDER = [
   "idempotency_records",
   "trace_links",
   "project_deletion_audits",
+  "workflow_pauses",
+  "workflow_leases",
+  "workflow_risks",
+  "workflow_checkpoints",
+  "termination_confirmations",
 ] as const;
 /** 运行骨架需要存在的基础表集合。 */
 export const RUNTIME_TABLES = [
@@ -66,6 +71,16 @@ export const ORGANIZATION_TABLE_ORDER = [
 ] as const;
 /** 用于启动完整性检查的组织表集合。 */
 export const ORGANIZATION_TABLES = new Set<string>(ORGANIZATION_TABLE_ORDER);
+/** Task 4 工作流事实表；状态恢复、租约和风险不能只保存在内存。 */
+export const WORKFLOW_TABLE_ORDER = [
+  "workflow_pauses",
+  "workflow_leases",
+  "workflow_risks",
+  "workflow_checkpoints",
+  "termination_confirmations",
+] as const;
+/** 用于启动完整性检查的工作流表集合。 */
+export const WORKFLOW_TABLES = new Set<string>(WORKFLOW_TABLE_ORDER);
 /** 组织、消息和策略审计依赖的复合查询索引。 */
 export const ORGANIZATION_INDEX_DEFINITIONS = [
   [
@@ -79,6 +94,26 @@ export const ORGANIZATION_INDEX_DEFINITIONS = [
     "project_id,task_id",
   ],
   ["organization_members", "ix_organization_members_role", "role_id"],
+] as const;
+/** 工作流查询和并发领取使用的固定索引。 */
+export const WORKFLOW_INDEX_DEFINITIONS = [
+  ["workflow_pauses", "ix_workflow_pauses_project", "project_id,created_at"],
+  ["workflow_leases", "ix_workflow_leases_task_status", "task_id,status"],
+  ["workflow_risks", "ix_workflow_risks_project_status", "project_id,status"],
+  [
+    "workflow_checkpoints",
+    "ix_workflow_checkpoints_attempt_created",
+    "attempt_id,created_at",
+  ],
+  [
+    "termination_confirmations",
+    "ix_termination_confirmations_project_status",
+    "project_id,status",
+  ],
+] as const;
+/** 工作流并发领取必须存在的部分唯一索引；它禁止同一任务出现两个 active lease。 */
+export const WORKFLOW_REQUIRED_INDEX_NAMES = [
+  "ux_workflow_leases_active_task",
 ] as const;
 /** 需要 project_id 索引和删除边界的业务表集合。 */
 export const PROJECT_SCOPED_TABLES = [
@@ -432,6 +467,98 @@ export function migrateOrganizationSchema(db: BetterSqlite3.Database): void {
   seedOrganization(db);
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0004_task3_organization_policy",
+  );
+}
+
+/**
+ * 创建 Task 4 的工作流控制事实表；暂停、租约、风险、检查点和终止确认必须可恢复、可审计。
+ */
+export function migrateWorkflowSchema(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_pauses (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      reason TEXT NOT NULL,
+      impact_scope_json TEXT NOT NULL CHECK (json_valid(impact_scope_json) = 1),
+      waiting_for TEXT NOT NULL,
+      available_actions_json TEXT NOT NULL CHECK (json_valid(available_actions_json) = 1),
+      recovery_condition TEXT NOT NULL,
+      previous_status TEXT NOT NULL,
+      previous_stage TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active','resolved')),
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolved_by TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
+    );
+    CREATE TABLE IF NOT EXISTS workflow_leases (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL UNIQUE,
+      role_id TEXT NOT NULL,
+      task_version INTEGER NOT NULL CHECK (task_version >= 1),
+      workspace_ref TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      heartbeat_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active','released','expired')),
+      release_result TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS workflow_risks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT,
+      severity TEXT NOT NULL CHECK (severity IN ('P0','P1','P2','P3')),
+      reason TEXT NOT NULL,
+      impact_scope_json TEXT NOT NULL CHECK (json_valid(impact_scope_json) = 1),
+      evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json) = 1),
+      recommendation TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open','resolved')),
+      approval_id TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id),
+      FOREIGN KEY(approval_id) REFERENCES approvals(id)
+    );
+    CREATE TABLE IF NOT EXISTS workflow_checkpoints (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT,
+      attempt_id TEXT,
+      project_status TEXT NOT NULL,
+      project_stage TEXT NOT NULL,
+      state_json TEXT NOT NULL CHECK (json_valid(state_json) = 1),
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id),
+      FOREIGN KEY(project_id,attempt_id) REFERENCES execution_attempts(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS termination_confirmations (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      token_hash TEXT NOT NULL UNIQUE,
+      reason TEXT NOT NULL,
+      expected_version INTEGER NOT NULL CHECK (expected_version >= 1),
+      actor_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('previewed','confirmed','expired')),
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_leases_active_task
+      ON workflow_leases(task_id) WHERE status = 'active';
+  `);
+  for (const [table, index, columns] of WORKFLOW_INDEX_DEFINITIONS)
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0005_task4_workflow",
   );
 }
 
