@@ -61,7 +61,12 @@ export class DockerCliRuntime implements ContainerRuntime {
 function findDockerExecutable(): string {
   const candidates =
     process.platform === "darwin"
-      ? ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "docker"]
+      ? [
+          "/usr/local/bin/docker",
+          "/opt/homebrew/bin/docker",
+          "/Applications/Docker.app/Contents/Resources/bin/docker",
+          "docker",
+        ]
       : ["docker"];
   for (const candidate of candidates) {
     if (candidate === "docker") return candidate;
