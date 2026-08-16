@@ -186,6 +186,119 @@ body {
   box-shadow: 0 6px 22px rgb(35 50 85 / 4%);
 }
 
+.office-occupants {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.office-occupant {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 5px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px;
+  color: inherit;
+  text-align: left;
+  background: #fafbfe;
+  border: 1px solid #edf0f6;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.office-occupant:hover,
+.office-occupant:focus-visible {
+  border-color: #5267d9;
+  outline: none;
+}
+
+.office-pixel-person {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  background: #5267d9;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.office-occupant-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.office-occupant-copy span {
+  overflow: hidden;
+  color: #6d778c;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-status-bar {
+  align-self: stretch;
+  min-height: 34px;
+  border-radius: 3px;
+}
+
+.office-room-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7b8794;
+}
+
+.office-room-active { background: #2f80ed; }
+.office-room-blocked { background: #dc2626; }
+.office-room-done { background: #16a34a; }
+
+.scorecard-gates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.scorecard-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #edf0f6;
+  border-radius: 10px;
+}
+
+.scorecard-gate-fail { border-color: #ffccc7; background: #fff2f0; }
+.scorecard-gate-data_insufficient { border-color: #ffe58f; background: #fffbe6; }
+
+.execution-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.execution-row-selected > td { background: #f0f2ff !important; }
+
+.link-button {
+  padding: 4px 8px;
+  color: #5267d9;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .page-content { padding: 16px; }
+  .page-heading { flex-direction: column; }
+}
+
 main {
   max-width: 1080px;
   margin: 0 auto;

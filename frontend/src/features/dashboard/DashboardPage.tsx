@@ -131,6 +131,15 @@ export function DashboardPage({
           </Space>
         </div>
         <Space wrap>
+          <Button onClick={() => onNavigate(`/projects/${projectId}/office`)}>
+            像素办公室
+          </Button>
+          <Button onClick={() => onNavigate(`/projects/${projectId}/executions`)}>
+            真实执行控制台
+          </Button>
+          <Button onClick={() => onNavigate(`/projects/${projectId}/scorecard`)}>
+            项目评分卡
+          </Button>
           <Button
             onClick={() => onNavigate(`/projects/${projectId}/notifications`)}
           >

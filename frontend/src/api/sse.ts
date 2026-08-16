@@ -9,7 +9,11 @@ export class DomainEventStream {
   private closed = false;
 
   /** 开始订阅提交后的领域事件，重连时使用 after 游标补齐。 */
-  start(queryClient: QueryClient, projectId?: string): () => void {
+  start(
+    queryClient: QueryClient,
+    projectId?: string,
+    onStatus?: (connected: boolean) => void,
+  ): () => void {
     this.closed = false;
     const connect = () => {
       if (this.closed || typeof EventSource === "undefined") return;
@@ -17,12 +21,14 @@ export class DomainEventStream {
       if (this.cursor) search.set("after", this.cursor);
       if (projectId) search.set("projectId", projectId);
       this.source = new EventSource(`/api/v1/events?${search.toString()}`);
+      onStatus?.(true);
       this.source.addEventListener("domain_event", (event) => {
         const message = event as MessageEvent<string>;
         if (message.lastEventId) this.cursor = message.lastEventId;
         invalidate(queryClient, projectId);
       });
       this.source.onerror = () => {
+        onStatus?.(false);
         this.source?.close();
         this.source = null;
         if (!this.closed && this.reconnectTimer === null) {
@@ -56,6 +62,9 @@ function invalidate(queryClient: QueryClient, projectId?: string): void {
       queryKey: queryKeys.dashboard(projectId),
     });
     void queryClient.invalidateQueries({
+      queryKey: queryKeys.office(projectId),
+    });
+    void queryClient.invalidateQueries({
       queryKey: queryKeys.tasks(projectId),
     });
     void queryClient.invalidateQueries({
@@ -69,6 +78,7 @@ function invalidate(queryClient: QueryClient, projectId?: string): void {
     });
   } else {
     void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["office"] });
     void queryClient.invalidateQueries({ queryKey: ["archive"] });
     void queryClient.invalidateQueries({ queryKey: ["notifications"] });
   }

@@ -45,6 +45,9 @@ export const queryKeys = {
   models: ["models"] as const,
   archive: (filters: string) => ["archive", filters] as const,
   archiveDetail: (projectId: string) => ["archive-detail", projectId] as const,
+  office: (projectId: string) => ["office", projectId] as const,
+  scorecard: (projectId: string) => ["scorecard", projectId] as const,
+  executions: (projectId?: string) => ["executions", projectId ?? "all"] as const,
 };
 
 /** 项目命令的统一 Boss 信封；重复点击由幂等键隔离。 */
@@ -91,6 +94,52 @@ export function getReadiness(): Promise<ReadinessView> {
 export function getDashboard(projectId: string): Promise<DashboardView> {
   return apiRequest<DashboardView>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/dashboard`,
+  );
+}
+
+/** 查询后端生成的像素办公室投影；页面不维护第二套员工或任务状态。 */
+export function getOffice(projectId: string): Promise<OfficeView> {
+  return apiRequest<OfficeView>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/office`,
+  );
+}
+
+/** 查询后端评分卡和硬性门槛；前端只负责展示，不计算总分。 */
+export function getScorecard(projectId: string): Promise<ScorecardView> {
+  return apiRequest<ScorecardView>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/scorecard`,
+  );
+}
+
+/** 请求后端追加一个评分卡历史快照。 */
+export function recalculateScorecard(projectId: string): Promise<ScorecardView> {
+  return apiRequest<ScorecardView>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/scorecard/recalculate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ actor: { type: "boss", id: "boss-local" } }),
+    },
+  );
+}
+
+/** 查询分页执行尝试；模型调用账本仍通过旧的兼容接口提供明细。 */
+export function getExecutionRuns(
+  projectId: string,
+  page = 1,
+  pageSize = 20,
+): Promise<ExecutionPage> {
+  const search = new URLSearchParams({
+    projectId,
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  return apiRequest<ExecutionPage>(`/api/v1/executions/runs?${search.toString()}`);
+}
+
+/** 查询一条真实执行的时间线、工具、测试、错误和产物索引。 */
+export function getExecution(executionId: string, projectId: string): Promise<ExecutionDetail> {
+  return apiRequest<ExecutionDetail>(
+    `/api/v1/executions/${encodeURIComponent(executionId)}?projectId=${encodeURIComponent(projectId)}`,
   );
 }
 
@@ -445,6 +494,91 @@ export type DashboardView = {
   modelSummary: Record<string, number>;
   allowedActions: string[];
   nextAction: string;
+};
+
+/** 像素办公室后端投影类型；状态字段同时带文字、图标和颜色语义。 */
+export type OfficeView = {
+  projectId: string;
+  snapshotVersion: number;
+  generatedAt: string;
+  projectStatus: string;
+  projectStage: string;
+  projectStatusLabel: string;
+  rooms: Array<{
+    roomId: string;
+    label: string;
+    status: string;
+    occupants: Array<{
+      workerId: string;
+      role: string;
+      displayName: string;
+      specialistTag: string;
+      officeZone: string;
+      deskGroup: string;
+      status: string;
+      statusLabel: string;
+      statusIcon: string;
+      statusColor: string;
+      accessibilityLabel: string;
+      taskId: string | null;
+      currentActivity: string;
+      waitingFor: string | null;
+      lastEventId: string | null;
+      updatedAt: string;
+    }>;
+  }>;
+  activeTasks: number;
+  blockedTasks: number;
+  pendingApprovals: number;
+  lastEventId: string | null;
+};
+
+/** 评分卡快照类型；硬性门槛独立于 overallScore。 */
+export type ScorecardView = {
+  snapshotId: string | null;
+  projectId: string;
+  scorecardVersion: number;
+  ruleVersion: string;
+  calculatedAt: string;
+  overallScore: number | null;
+  releaseStatus: string;
+  dimensions: Array<{
+    dimensionId: string;
+    label: string;
+    score: number | null;
+    status: string;
+    evidenceIds: string[];
+    issues: string[];
+    missingData: string[];
+  }>;
+  hardGates: Array<{
+    gateId: string;
+    label: string;
+    status: string;
+    evidenceIds: string[];
+    reason: string | null;
+    remediation: string | null;
+  }>;
+  recommendations: string[];
+  sourceDataVersion: string;
+};
+
+/** 执行尝试摘要分页类型。 */
+export type ExecutionPage = {
+  items: Array<Record<string, unknown> & { executionId: string }>;
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+};
+
+/** 执行详情只保留后端脱敏摘要和证据引用，不包含凭据或宿主机绝对路径。 */
+export type ExecutionDetail = Record<string, unknown> & {
+  executionId: string;
+  projectId: string;
+  taskId: string;
+  status: string;
+  timeline: Array<Record<string, unknown>>;
 };
 /** 后端已提交命令的稳定结果，用于刷新相关 Query。 */
 export type CommandResult = {

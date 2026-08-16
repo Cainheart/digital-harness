@@ -31,6 +31,7 @@ import {
   migrateCodingSchema,
   migrateQualityFlowSchema,
   migrateArchiveConsoleSchema,
+  migrateTask10Schema,
   ARCHIVE_INDEX_DEFINITIONS,
   migrateQualityTraceLinkTriggers,
   ORGANIZATION_INDEX_DEFINITIONS,
@@ -46,6 +47,7 @@ import {
   QUALITY_TABLES,
   QUALITY_INDEX_DEFINITIONS,
   QUALITY_REQUIRED_INDEX_DEFINITIONS,
+  SCORECARD_TABLES,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
@@ -199,6 +201,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -229,6 +232,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -258,6 +262,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -286,6 +291,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -313,6 +319,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0005_task4_workflow") {
         const callback =
           backupCallback ??
@@ -339,6 +346,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0006_task4_workflow_hardening") {
         const callback =
           backupCallback ??
@@ -364,6 +372,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0007_task5_model_gateway") {
         const callback =
           backupCallback ??
@@ -388,6 +397,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0008_task6_research") {
         const callback =
           backupCallback ??
@@ -411,6 +421,7 @@ export class Database {
         migrateCodingSchema(this.connection);
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0009_task7_coding") {
         const callback =
           backupCallback ??
@@ -433,6 +444,7 @@ export class Database {
           );
         migrateQualityFlowSchema(this.connection);
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
       } else if (current === "0010_task8_quality_flow") {
         const callback =
           backupCallback ??
@@ -454,13 +466,35 @@ export class Database {
             "修复 Task 9 迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateArchiveConsoleSchema(this.connection);
+        migrateTask10Schema(this.connection);
+      } else if (current === "0011_task9_archive_console") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复 Task 10 迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateTask10Schema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         migrateQualityTraceLinkTriggers(this.connection);
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0011_task9_archive_console",
+          "备份持久化根目录并沿批准路径升级到 0012_task10_observability_ops",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -803,6 +837,7 @@ export class Database {
       ...RESEARCH_TABLES,
       ...CODING_TABLES,
       ...QUALITY_TABLES,
+      ...SCORECARD_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -1372,6 +1407,19 @@ export class Database {
         "request_hash",
         "response_json",
         "created_at",
+      ],
+      scorecard_snapshots: [
+        "id",
+        "project_id",
+        "version_number",
+        "rule_version",
+        "calculated_at",
+        "overall_score",
+        "release_status",
+        "dimensions_json",
+        "hard_gates_json",
+        "recommendations_json",
+        "source_data_version",
       ],
     };
     for (const [table, columns] of Object.entries(requiredColumns))

@@ -13,6 +13,9 @@ import { ArchivePage } from "../features/archive/ArchivePage";
 import { ArchiveDetailPage } from "../features/archive/ArchiveDetailPage";
 import { TaskDetailPage } from "../features/tasks/TaskDetailPage";
 import { ArtifactDetailPage } from "../features/artifacts/ArtifactDetailPage";
+import { OfficePage } from "../features/office/OfficePage";
+import { ScorecardPage } from "../features/scorecard/ScorecardPage";
+import { ExecutionConsolePage } from "../features/executions/ExecutionConsolePage";
 
 const { Header, Sider, Content } = Layout;
 
@@ -105,6 +108,15 @@ function renderRoute(path: string, navigate: (path: string) => void) {
         onNavigate={navigate}
       />
     );
+  const officeMatch = match(path, /^\/projects\/([^/]+)\/office$/);
+  if (officeMatch)
+    return <OfficePage projectId={officeMatch[1]} onNavigate={navigate} />;
+  const scorecardMatch = match(path, /^\/projects\/([^/]+)\/scorecard$/);
+  if (scorecardMatch)
+    return <ScorecardPage projectId={scorecardMatch[1]} onNavigate={navigate} />;
+  const executionMatch = match(path, /^\/projects\/([^/]+)\/executions$/);
+  if (executionMatch)
+    return <ExecutionConsolePage projectId={executionMatch[1]} onNavigate={navigate} />;
   const artifactMatch = match(
     path,
     /^\/projects\/([^/]+)\/artifacts\/([^/]+)$/,

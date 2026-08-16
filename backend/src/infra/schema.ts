@@ -182,6 +182,10 @@ export const QUALITY_TABLE_ORDER = [
 ] as const;
 /** 用于启动完整性检查的 Task 8 表集合。 */
 export const QUALITY_TABLES = new Set<string>(QUALITY_TABLE_ORDER);
+/** Task 10 评分卡历史快照；原始证据仍由上游事实表保存。 */
+export const SCORECARD_TABLE_ORDER = ["scorecard_snapshots"] as const;
+/** 用于启动完整性检查的 Task 10 评估表集合。 */
+export const SCORECARD_TABLES = new Set<string>(SCORECARD_TABLE_ORDER);
 /** Task 7 按 Attempt、会话和项目查询证据的固定索引。 */
 export const CODING_INDEX_DEFINITIONS = [
   [
@@ -221,6 +225,15 @@ export const QUALITY_INDEX_DEFINITIONS = [
 /** Task 8 复合外键依赖的唯一父键索引；旧 defects 表只有单列主键，需补齐项目隔离父键。 */
 export const QUALITY_REQUIRED_INDEX_DEFINITIONS = [
   ["defects", "ux_defects_project_id_id", "project_id,id"],
+] as const;
+/** Task 10 评分卡按项目和版本回看的固定索引。 */
+export const SCORECARD_INDEX_DEFINITIONS = [
+  ["scorecard_snapshots", "ix_scorecard_snapshots_project_id", "project_id"],
+  [
+    "scorecard_snapshots",
+    "ix_scorecard_snapshots_project_version",
+    "project_id,version_number",
+  ],
 ] as const;
 /** Task 6 查询使用的固定复合索引。 */
 export const RESEARCH_INDEX_DEFINITIONS = [
@@ -289,6 +302,7 @@ export const ALL_PROJECT_SCOPED_TABLES = [
   ...RESEARCH_PROJECT_SCOPED_TABLES,
   ...CODING_TABLE_ORDER,
   ...QUALITY_TABLE_ORDER.filter((table) => table !== "quality_idempotency"),
+  ...SCORECARD_TABLE_ORDER,
 ] as const;
 /** 为项目范围表生成固定的 project_id 索引名，供 migration 和完整性检查共用。 */
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries(
@@ -1354,6 +1368,32 @@ export function migrateArchiveConsoleSchema(
     db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0011_task9_archive_console",
+  );
+}
+
+/** 创建 Task 10 评分卡不可变快照；数据不足时 overall_score 保留 NULL 而不是伪造 0 分。 */
+export function migrateTask10Schema(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scorecard_snapshots (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      version_number INTEGER NOT NULL CHECK (version_number >= 1),
+      rule_version TEXT NOT NULL,
+      calculated_at TEXT NOT NULL,
+      overall_score INTEGER CHECK (overall_score >= 0 AND overall_score <= 100),
+      release_status TEXT NOT NULL CHECK (release_status IN ('PASS','BLOCKED','NEEDS_REMEDIATION','DATA_INSUFFICIENT')),
+      dimensions_json TEXT NOT NULL CHECK (json_valid(dimensions_json) = 1),
+      hard_gates_json TEXT NOT NULL CHECK (json_valid(hard_gates_json) = 1),
+      recommendations_json TEXT NOT NULL CHECK (json_valid(recommendations_json) = 1),
+      source_data_version TEXT NOT NULL,
+      UNIQUE(project_id,version_number)
+    );
+  `);
+  for (const [table, index, columns] of SCORECARD_INDEX_DEFINITIONS) {
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  }
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0012_task10_observability_ops",
   );
 }
 

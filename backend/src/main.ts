@@ -64,6 +64,14 @@ import { OrganizationService } from "./application/organization-service.js";
 import { QualityFlowService } from "./application/quality-flow.js";
 import { ArchiveService } from "./application/archive-service.js";
 import { ConsoleQueryService } from "./application/console-query-service.js";
+import { ExecutionQueryService } from "./application/execution-query-service.js";
+import { OfficeProjection } from "./application/office-projection.js";
+import { ScorecardService } from "./application/scorecard-service.js";
+import { registerOfficeRoutes } from "./api/office-routes.js";
+import { registerScorecardRoutes } from "./api/scorecard-routes.js";
+import { registerOpsRoutes } from "./api/ops-routes.js";
+import { BackupService } from "./ops/backup.js";
+import { RestoreService } from "./ops/restore.js";
 import {
   PlaywrightResearchBrowser,
   UnavailableResearchBrowser,
@@ -95,6 +103,11 @@ export type RuntimeState = {
   qualityFlow: QualityFlowService;
   consoleQueries: ConsoleQueryService;
   archive: ArchiveService;
+  executionQueries: ExecutionQueryService;
+  officeProjection: OfficeProjection;
+  scorecard: ScorecardService;
+  backup: BackupService;
+  restore: RestoreService;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -185,6 +198,15 @@ export function createApp(options: {
   const organization = new OrganizationService(database);
   const consoleQueries = new ConsoleQueryService(database);
   const archive = new ArchiveService(database, artifactStore);
+  const executionQueries = new ExecutionQueryService(database);
+  const officeProjection = new OfficeProjection(database);
+  const scorecard = new ScorecardService(database);
+  const backup = new BackupService(
+    database,
+    settings.appVersion,
+    settings.persistentRoot,
+  );
+  const restore = new RestoreService(database, settings.appVersion);
   const workspaceManager = new WorkspaceManager(settings.workspacePath);
   const fileGateway = new FileGateway(workspaceManager, artifactStore);
   const codingHarness = new NativeCodingHarness({
@@ -219,6 +241,11 @@ export function createApp(options: {
     qualityFlow,
     consoleQueries,
     archive,
+    executionQueries,
+    officeProjection,
+    scorecard,
+    backup,
+    restore,
     schemaInitializationError,
     testMode,
   };
@@ -294,7 +321,7 @@ export function createApp(options: {
   registerPolicyRoutes(app, { testMode });
   registerWorkflowRoutes(app, { testMode, researchWorkflow });
   registerModelSettingsRoutes(app, { testMode });
-  registerExecutionRoutes(app, { testMode });
+  registerExecutionRoutes(app, { testMode, queries: executionQueries });
   registerResearchRoutes(app, { testMode });
   registerCodingRoutes(app, {
     testMode,
@@ -307,6 +334,9 @@ export function createApp(options: {
     queries: consoleQueries,
     archive,
   });
+  registerOfficeRoutes(app, { testMode, projection: officeProjection });
+  registerScorecardRoutes(app, { testMode, scorecard });
+  registerOpsRoutes(app, { testMode, backup, restore });
   return app;
 }
 
