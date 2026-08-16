@@ -2,7 +2,7 @@
 
 > 任务：DEV-03；当前分支：`dev/task-3`；基线：`0004_task3_organization_policy`
 > 
-> 完成提交哈希：`7aa3c6a`（基础实现）、`abd3759`（Review 修复：`fix(task-3): harden policy and message boundaries`）；文档更新继续在同一 `dev/task-3` 分支提交；本分支未合并到 `master`。
+> 完成提交哈希：`7aa3c6a`（基础实现）、`abd3759`（Review 修复：`fix(task-3): harden policy and message boundaries`）、`7d1cda4`（按最新代码开发规范完成 Task 1～3 统一重构）；本分支未合并到 `master`。
 
 ## 实现范围
 
@@ -85,6 +85,6 @@ npm test
 ## 分支交付
 
 - 开发分支：`dev/task-3`。
-- 完成提交：`7aa3c6a`、`abd3759`。
-- Review：已完成；发现项已在 `abd3759` 修复，回归测试 45/45 通过。
+- 完成提交：`7aa3c6a`、`abd3759`、`7d1cda4`。
+- Review：已完成；发现项已在 `abd3759` 修复，本轮规范化重构在 `7d1cda4` 完成，回归测试 49/49 通过。
 - 合并到 `master`：验收和 Review 通过后再执行；当前未合并。
