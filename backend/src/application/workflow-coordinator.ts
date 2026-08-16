@@ -33,6 +33,7 @@ import {
 } from "../domain/commands.js";
 import {
   EvidenceIncompleteError,
+  IdempotencyKeyReusedError,
   InvalidArgumentError,
   NotFoundError,
   PolicyDeniedError,
@@ -633,7 +634,10 @@ export class WorkflowCoordinator {
     const command = this.command(input, taskId);
     if (command.actor.type === "boss")
       throw new PolicyDeniedError("Boss 不代替开发代表执行成员级 Review");
-    if (command.actor.id === task.ownerRole)
+    if (
+      command.actor.id === task.ownerRole ||
+      command.actor.type === task.ownerRole
+    )
       throw new PolicyDeniedError("任务负责人不能批准自己的 Review");
     const decision = command.payload.decision;
     if (decision !== "approved" && decision !== "rejected")
@@ -814,10 +818,66 @@ export class WorkflowCoordinator {
 
   /** 保存一般/重大风险，重大风险会暂停项目并创建 Boss 审批入口。 */
   createRisk(input: RiskInput): Record<string, unknown> {
+    if (!(["P0", "P1", "P2", "P3"] as string[]).includes(input.severity)) {
+      throw new InvalidArgumentError("风险 severity 必须是 P0、P1、P2 或 P3");
+    }
     const project = this.projects.getProject(
       this.database.connection,
       input.projectId,
     );
+    if (input.taskId) {
+      const relatedTask = this.database.connection
+        .prepare("SELECT project_id FROM tasks WHERE id=?")
+        .get(input.taskId) as { project_id: string } | undefined;
+      if (!relatedTask || relatedTask.project_id !== input.projectId) {
+        throw new NotFoundError("风险关联任务不属于当前项目");
+      }
+    }
+    const existingRisk = this.database.connection
+      .prepare(
+        "SELECT task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,response_task_id FROM workflow_risks WHERE id=? AND project_id=?",
+      )
+      .get(input.id, input.projectId) as
+      | {
+          task_id: string | null;
+          severity: string;
+          reason: string;
+          impact_scope_json: string;
+          evidence_json: string;
+          recommendation: string;
+          status: string;
+          approval_id: string | null;
+          response_task_id: string | null;
+        }
+      | undefined;
+    if (existingRisk) {
+      const sameRisk =
+        existingRisk.task_id === (input.taskId ?? null) &&
+        existingRisk.severity === input.severity &&
+        existingRisk.reason === input.reason &&
+        existingRisk.impact_scope_json === JSON.stringify(input.impactScope) &&
+        existingRisk.evidence_json === JSON.stringify(input.evidence) &&
+        existingRisk.recommendation === input.recommendation;
+      if (!sameRisk)
+        throw new IdempotencyKeyReusedError("风险 ID 已被其他风险事实使用", {
+          data: { riskId: input.id, projectId: input.projectId },
+        });
+      const responseTask = existingRisk.response_task_id
+        ? (this.database.connection
+            .prepare("SELECT owner_role FROM tasks WHERE id=?")
+            .get(existingRisk.response_task_id) as
+            | { owner_role: string }
+            | undefined)
+        : undefined;
+      return {
+        id: input.id,
+        projectId: input.projectId,
+        status: existingRisk.status,
+        approvalId: existingRisk.approval_id,
+        responseTaskId: existingRisk.response_task_id,
+        responseOwnerRole: responseTask?.owner_role ?? null,
+      };
+    }
     if (input.severity === "P0" || input.severity === "P1") {
       const pauseInput = {
         commandId: newObjectId("risk-pause"),
@@ -844,73 +904,74 @@ export class WorkflowCoordinator {
         input.projectId,
         (connection, current) => {
           if (!current) throw new NotFoundError("项目不存在");
-          if (current.status !== ProjectStatus.PAUSED) {
-            assertProjectTransition(current.status, ProjectStatus.PAUSED, {
-              reason: "major_risk",
-            });
-            const next = this.nextProject(current, {
-              status: ProjectStatus.PAUSED,
-            });
-            this.projects.updateProject(connection, next, current.version);
-            const approval = this.newApproval(current, ApprovalType.MAJOR_RISK);
-            this.evidence.createApproval(connection, approval);
-            this.insertPause(connection, {
+          if (current.status !== ProjectStatus.RUNNING) {
+            throw workflowBlocked("重大风险自动暂停只允许作用于运行中项目", {
               projectId: input.projectId,
-              reason: input.reason,
-              impactScope: input.impactScope,
-              waitingFor: "Boss 重大风险裁决",
-              availableActions: [
-                "查看证据",
-                "完成重大风险审批",
-                "满足恢复条件后恢复",
-              ],
-              recoveryCondition: input.recommendation,
-              previousStatus: current.status,
-              previousStage: current.stage,
-              createdAt: utcNow(),
+              status: current.status,
             });
-            connection
-              .prepare(
-                "INSERT INTO workflow_risks (id,project_id,task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,created_at,resolved_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-              )
-              .run(
-                input.id,
-                input.projectId,
-                input.taskId ?? null,
-                input.severity,
-                input.reason,
-                JSON.stringify(input.impactScope),
-                JSON.stringify(input.evidence),
-                input.recommendation,
-                "open",
-                approval.id,
-                utcNow(),
-                null,
-                1,
-              );
-            return {
-              projectId: input.projectId,
-              newVersion: next.version,
-              eventType: "MajorRiskPaused",
-              payload: {
-                projectId: input.projectId,
-                riskId: input.id,
-                approvalId: approval.id,
-                reason: input.reason,
-              },
-              notification: {
-                notificationType: "major_risk",
-                severity: "P0",
-                subjectType: "approval",
-                subjectId: approval.id,
-                action: "完成重大风险 Boss 裁决",
-              },
-            };
           }
-          throw workflowBlocked(
-            "项目已经因风险暂停，不能重复创建自动暂停事实",
-            { projectId: input.projectId },
-          );
+          assertProjectTransition(current.status, ProjectStatus.PAUSED, {
+            reason: "major_risk",
+          });
+          const next = this.nextProject(current, {
+            status: ProjectStatus.PAUSED,
+          });
+          this.projects.updateProject(connection, next, current.version);
+          const approval = this.newApproval(current, ApprovalType.MAJOR_RISK);
+          this.evidence.createApproval(connection, approval);
+          this.insertPause(connection, {
+            projectId: input.projectId,
+            reason: input.reason,
+            impactScope: input.impactScope,
+            waitingFor: "Boss 重大风险裁决",
+            availableActions: [
+              "查看证据",
+              "完成重大风险审批",
+              "满足恢复条件后恢复",
+            ],
+            recoveryCondition: input.recommendation,
+            previousStatus: current.status,
+            previousStage: current.stage,
+            createdAt: utcNow(),
+          });
+          connection
+            .prepare(
+              "INSERT INTO workflow_risks (id,project_id,task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,response_task_id,created_at,resolved_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            )
+            .run(
+              input.id,
+              input.projectId,
+              input.taskId ?? null,
+              input.severity,
+              input.reason,
+              JSON.stringify(input.impactScope),
+              JSON.stringify(input.evidence),
+              input.recommendation,
+              "open",
+              approval.id,
+              null,
+              utcNow(),
+              null,
+              1,
+            );
+          return {
+            projectId: input.projectId,
+            newVersion: next.version,
+            eventType: "MajorRiskPaused",
+            payload: {
+              projectId: input.projectId,
+              riskId: input.id,
+              approvalId: approval.id,
+              reason: input.reason,
+            },
+            notification: {
+              notificationType: "major_risk",
+              severity: "P0",
+              subjectType: "approval",
+              subjectId: approval.id,
+              action: "完成重大风险 Boss 裁决",
+            },
+          };
         },
       );
       const risk = this.database.connection
@@ -924,28 +985,106 @@ export class WorkflowCoordinator {
         approvalId: risk?.approval_id ?? null,
       };
     }
-    return this.database.transaction((connection) => {
-      connection
-        .prepare(
-          "INSERT INTO workflow_risks (id,project_id,task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,created_at,resolved_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          input.id,
+    const command = this.command(
+      {
+        commandId: `risk-report-${input.id}`,
+        idempotencyKey: `risk-report:${input.id}`,
+        expectedVersion: project.version,
+        actor: { type: "workflow_coordinator", id: "workflow-coordinator" },
+        payload: {
+          riskId: input.id,
+          taskId: input.taskId ?? null,
+          severity: input.severity,
+          reason: input.reason,
+          impactScope: input.impactScope,
+          evidence: input.evidence,
+          recommendation: input.recommendation,
+        },
+      },
+      input.projectId,
+    );
+    const result = this.executeProjectCommand(
+      command,
+      input.projectId,
+      (connection, current) => {
+        if (!current) throw new NotFoundError("项目不存在");
+        if (current.status !== ProjectStatus.RUNNING) {
+          throw workflowBlocked("一般风险整改任务只允许作用于运行中项目", {
+            projectId: input.projectId,
+            status: current.status,
+          });
+        }
+        // 修改日期：2026-08-16
+        // 修改原因：SR-WFL-014 要求一般风险必须由责任组长形成整改任务，不能只保留一条无法执行的风险记录；同时用统一事件链保留风险报告和通知。
+        const responseOwnerRole = this.riskResponseOwner(
+          connection,
           input.projectId,
-          input.taskId ?? null,
-          input.severity,
-          input.reason,
-          JSON.stringify(input.impactScope),
-          JSON.stringify(input.evidence),
-          input.recommendation,
-          "open",
-          null,
-          utcNow(),
-          null,
-          1,
+          input.taskId,
         );
-      return { id: input.id, projectId: input.projectId, status: "open" };
-    });
+        const responseTaskId = this.createResponseTask(
+          connection,
+          current,
+          "一般风险整改",
+          responseOwnerRole,
+          input.recommendation,
+        );
+        connection
+          .prepare(
+            "INSERT INTO workflow_risks (id,project_id,task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,response_task_id,created_at,resolved_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          )
+          .run(
+            input.id,
+            input.projectId,
+            input.taskId ?? null,
+            input.severity,
+            input.reason,
+            JSON.stringify(input.impactScope),
+            JSON.stringify(input.evidence),
+            input.recommendation,
+            "open",
+            null,
+            responseTaskId,
+            utcNow(),
+            null,
+            1,
+          );
+        return {
+          projectId: input.projectId,
+          newVersion: current.version,
+          eventType: "RiskReported",
+          status: current.status,
+          payload: {
+            riskId: input.id,
+            severity: input.severity,
+            responseTaskId,
+            responseOwnerRole,
+          },
+          notification: {
+            notificationType: "risk_report",
+            severity: input.severity,
+            subjectType: "risk",
+            subjectId: input.id,
+            action: "查看风险证据并跟踪责任组整改任务",
+          },
+        };
+      },
+    );
+    const risk = this.database.connection
+      .prepare(
+        "SELECT response_task_id FROM workflow_risks WHERE id=? AND project_id=?",
+      )
+      .get(input.id, input.projectId) as { response_task_id: string };
+    const task = this.database.connection
+      .prepare("SELECT owner_role FROM tasks WHERE id=?")
+      .get(risk.response_task_id) as { owner_role: string };
+    return {
+      ...result,
+      id: input.id,
+      projectId: input.projectId,
+      status: "open",
+      responseTaskId: risk.response_task_id,
+      responseOwnerRole: task.owner_role,
+    };
   }
 
   private executeApprovalCommand(
@@ -1015,6 +1154,12 @@ export class WorkflowCoordinator {
         current,
         decision,
         opinion,
+      );
+      this.resolveApprovalNotifications(
+        connection,
+        current.id,
+        command.actor.id,
+        decision,
       );
       const eventCount = this.events.countForAggregate(
         connection,
@@ -1095,12 +1240,16 @@ export class WorkflowCoordinator {
           : WorkflowStage.RESEARCH_PRD;
       status = ProjectStatus.RUNNING;
       if (decision === "rejected")
-        this.createResponseTask(
+        this.linkApprovalResponseTask(
           connection,
-          project,
-          "PM 修订 PRD",
-          "product_solution_pm",
-          opinion ?? "Boss 要求修订 PRD",
+          approval.id,
+          this.createResponseTask(
+            connection,
+            project,
+            "PM 修订 PRD",
+            "product_solution_pm",
+            opinion ?? "Boss 要求修订 PRD",
+          ),
         );
     } else if (approval.approvalType === ApprovalType.REQUIREMENT_DISPUTE) {
       stage =
@@ -1109,14 +1258,23 @@ export class WorkflowCoordinator {
           : WorkflowStage.RESEARCH_PRD;
       status = ProjectStatus.RUNNING;
       if (decision === "approved")
-        this.createResponseTask(
+        this.linkApprovalResponseTask(
           connection,
-          project,
-          "按 Boss 方向完成任务拆解",
-          "developer_representative",
-          opinion ?? "按批准方向拆解任务",
+          approval.id,
+          this.createResponseTask(
+            connection,
+            project,
+            "按 Boss 方向完成任务拆解",
+            "developer_representative",
+            opinion ?? "按批准方向拆解任务",
+          ),
         );
     } else if (approval.approvalType === ApprovalType.MAJOR_RISK) {
+      const risk = connection
+        .prepare(
+          "SELECT task_id FROM workflow_risks WHERE approval_id=? AND status='open'",
+        )
+        .get(approval.id) as { task_id: string | null } | undefined;
       if (decision === "approved") {
         const pause = this.activePause(connection, project.id);
         stage = pause?.previous_stage ?? project.stage;
@@ -1130,6 +1288,23 @@ export class WorkflowCoordinator {
             "UPDATE workflow_risks SET status='resolved',resolved_at=?,version=version+1 WHERE approval_id=? AND status='open'",
           )
           .run(utcNow(), approval.id);
+        if (opinion?.trim()) {
+          this.linkApprovalResponseTask(
+            connection,
+            approval.id,
+            this.createResponseTask(
+              connection,
+              project,
+              "执行重大风险 Boss 方向",
+              this.riskResponseOwner(
+                connection,
+                project.id,
+                risk?.task_id ?? undefined,
+              ),
+              opinion,
+            ),
+          );
+        }
       } else {
         status = ProjectStatus.PAUSED;
       }
@@ -1155,12 +1330,16 @@ export class WorkflowCoordinator {
       } else {
         status = ProjectStatus.RUNNING;
         stage = rejectedTestReleaseTarget();
-        this.createResponseTask(
+        this.linkApprovalResponseTask(
           connection,
-          project,
-          "测试放行整改计划",
-          "test_lead",
-          opinion ?? "Boss 要求制定整改计划",
+          approval.id,
+          this.createResponseTask(
+            connection,
+            project,
+            "测试放行整改计划",
+            "test_lead",
+            opinion ?? "Boss 要求制定整改计划",
+          ),
         );
       }
     }
@@ -1226,7 +1405,24 @@ export class WorkflowCoordinator {
           }
         : { stage: WorkflowStage.TASK_BREAKDOWN, approval: null };
     }
-    if (project.stage === WorkflowStage.REAL_TEST)
+    if (project.stage === WorkflowStage.REAL_TEST) {
+      const openDefect = connection
+        .prepare(
+          "SELECT id FROM defects WHERE project_id=? AND status NOT IN ('closed','resolved') LIMIT 1",
+        )
+        .get(project.id);
+      if (openDefect) {
+        return {
+          stage: WorkflowStage.DEFECT_NPI_REGRESSION,
+          approval: null,
+        };
+      }
+      return {
+        stage: WorkflowStage.TEST_RELEASE,
+        approval: this.newApproval(project, ApprovalType.TEST_RELEASE),
+      };
+    }
+    if (project.stage === WorkflowStage.DEFECT_NPI_REGRESSION)
       return {
         stage: WorkflowStage.TEST_RELEASE,
         approval: this.newApproval(project, ApprovalType.TEST_RELEASE),
@@ -1283,6 +1479,42 @@ export class WorkflowCoordinator {
       version: 1,
     });
     return taskId;
+  }
+
+  /** 将一般风险路由给受影响领域组长，未知来源默认交给质量/风险主管。 */
+  private riskResponseOwner(
+    connection: BetterSqlite3.Database,
+    projectId: string,
+    taskId?: string,
+  ): string {
+    const owner = taskId
+      ? (connection
+          .prepare(
+            "SELECT rd.domain_id FROM tasks t JOIN role_definitions rd ON rd.role_id=t.owner_role WHERE t.project_id=? AND t.id=?",
+          )
+          .get(projectId, taskId) as { domain_id: string } | undefined)
+      : undefined;
+    const roleByDomain: Record<string, string> = {
+      product: "product_solution_pm",
+      development: "developer_representative",
+      npi: "npi_lead",
+      testing: "test_lead",
+      project_management: "quality_risk_supervisor",
+    };
+    return roleByDomain[owner?.domain_id ?? ""] ?? "quality_risk_supervisor";
+  }
+
+  /** 将 Boss 的方向审批与责任组响应任务双向关联，保留可追溯闭环。 */
+  private linkApprovalResponseTask(
+    connection: BetterSqlite3.Database,
+    approvalId: string,
+    responseTaskId: string,
+  ): void {
+    connection
+      .prepare(
+        "UPDATE approvals SET response_task_id=? WHERE id=? AND response_task_id IS NULL",
+      )
+      .run(responseTaskId, approvalId);
   }
 
   private executeProjectCommand(
@@ -1686,6 +1918,27 @@ export class WorkflowCoordinator {
         null,
         null,
         eventId,
+      );
+  }
+
+  /** 审批业务决定后关闭对应通知，避免审批已完成但 Boss 待办仍显示 pending。 */
+  private resolveApprovalNotifications(
+    connection: BetterSqlite3.Database,
+    approvalId: string,
+    handledBy: string,
+    decision: "approved" | "rejected",
+  ): void {
+    const handledAt = utcNow();
+    connection
+      .prepare(
+        "UPDATE notifications SET unread=0,pending=0,handled_by=?,action=?,handled_at=?,read_at=COALESCE(read_at,?) WHERE subject_type='approval' AND subject_id=? AND pending=1",
+      )
+      .run(
+        handledBy,
+        decision === "approved" ? "审批已通过" : "审批已驳回",
+        handledAt,
+        handledAt,
+        approvalId,
       );
   }
 

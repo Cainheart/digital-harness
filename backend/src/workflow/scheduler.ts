@@ -40,6 +40,7 @@ export type TaskLease = {
   acquiredAt: string;
   heartbeatAt: string;
   expiresAt: string;
+  grantExpiresAt: string;
   status: "active" | "released" | "expired";
   traceId: string;
 };
@@ -84,6 +85,15 @@ export function assertGrantUsable(
       attemptId: grant.attemptId,
     });
   }
+  const workspaceSuffix = grant.workspaceRef.slice(workspacePrefix.length);
+  const hasUnsafeWorkspaceSuffix =
+    workspaceSuffix.includes("..") ||
+    /[\\\u0000-\u001f\u007f]/.test(workspaceSuffix);
+  if (hasUnsafeWorkspaceSuffix) {
+    throw schedulerBlocked("Grant 的工作区引用包含非法路径片段", {
+      workspaceRef: grant.workspaceRef,
+    });
+  }
   if (!Number.isInteger(grant.roleVersion) || grant.roleVersion < 1)
     throw schedulerBlocked("Grant 的 roleVersion 无效", {
       roleVersion: grant.roleVersion,
@@ -119,6 +129,69 @@ export class TaskScheduler {
     now = new Date(),
   ): TaskLease {
     assertGrantUsable(grant, now);
+    const existing = connection
+      .prepare("SELECT * FROM workflow_leases WHERE attempt_id=?")
+      .get(grant.attemptId) as LeaseRow | undefined;
+    if (existing) {
+      if (
+        existing.project_id !== grant.projectId ||
+        existing.task_id !== grant.taskId ||
+        existing.role_id !== grant.roleId ||
+        existing.task_version !== grant.taskVersion ||
+        existing.workspace_ref !== grant.workspaceRef ||
+        existing.trace_id !== grant.traceId
+      ) {
+        throw schedulerBlocked("Attempt 已绑定不一致的 Grant", {
+          attemptId: grant.attemptId,
+        });
+      }
+      const existingAttempt = connection
+        .prepare(
+          "SELECT project_id,task_id,role,model_config_version,workspace_ref,trace_id,status,role_version FROM execution_attempts WHERE id=?",
+        )
+        .get(grant.attemptId) as AttemptRow | undefined;
+      const current = this.taskRow(connection, grant.taskId);
+      if (
+        !existingAttempt ||
+        existingAttempt.project_id !== grant.projectId ||
+        existingAttempt.task_id !== grant.taskId ||
+        existingAttempt.role !== grant.roleId ||
+        existingAttempt.model_config_version !== grant.modelConfigVersion ||
+        existingAttempt.workspace_ref !== grant.workspaceRef ||
+        existingAttempt.trace_id !== grant.traceId ||
+        existingAttempt.role_version !== grant.roleVersion ||
+        existingAttempt.status !== "running" ||
+        !current
+      ) {
+        throw schedulerBlocked("Attempt 已绑定不一致的执行授权", {
+          attemptId: grant.attemptId,
+        });
+      }
+      // 修改日期：2026-08-16
+      // 修改原因：重复 Claim 也必须重新经过服务端岗位策略校验，防止同一 Attempt 的重放请求携带扩大的工具或命令权限。
+      this.assertGrantPolicyBound(connection, current, grant);
+      if (existing.status !== "active") {
+        throw schedulerBlocked("Attempt 已经处理，不能重复领取", {
+          attemptId: grant.attemptId,
+          status: existing.status,
+        });
+      }
+      const existingLeaseExpiresAt = parseDate(
+        existing.expires_at,
+        "expires_at",
+      );
+      const existingGrantExpiresAt = parseDate(
+        existing.grant_expires_at,
+        "grant_expires_at",
+      );
+      if (existingLeaseExpiresAt <= now || existingGrantExpiresAt <= now) {
+        // 修改日期：2026-08-16
+        // 修改原因：重复 Claim 不能把数据库中已过期的活动租约当作有效结果返回，避免 Worker 在失效 Attempt 上继续执行。
+        this.expireLease(connection, existing, now);
+        return leaseFromRow(this.leaseRow(connection, grant.attemptId));
+      }
+      return leaseFromRow(existing);
+    }
     const current = this.taskRow(connection, grant.taskId);
     if (!current || current.project_id !== grant.projectId)
       throw schedulerBlocked("任务不属于 Grant 指定项目", {
@@ -146,6 +219,11 @@ export class TaskScheduler {
       });
     if (!this.dependenciesSatisfied(connection, current))
       throw schedulerBlocked("任务依赖尚未全部完成", { taskId: grant.taskId });
+    const policySnapshot = this.assertGrantPolicyBound(
+      connection,
+      current,
+      grant,
+    );
     this.assertRoleAvailable(connection, grant.roleId);
     const higherPriority = this.hasRunnableHigherPriority(
       connection,
@@ -157,19 +235,6 @@ export class TaskScheduler {
         taskId: grant.taskId,
         reason: "higher_priority_task_available",
       });
-    const existing = connection
-      .prepare("SELECT * FROM workflow_leases WHERE attempt_id=?")
-      .get(grant.attemptId) as LeaseRow | undefined;
-    if (existing) {
-      if (
-        existing.project_id !== grant.projectId ||
-        existing.task_id !== grant.taskId
-      )
-        throw schedulerBlocked("Attempt 已绑定其他项目或任务", {
-          attemptId: grant.attemptId,
-        });
-      return leaseFromRow(existing);
-    }
     const active = connection
       .prepare(
         "SELECT id FROM workflow_leases WHERE task_id=? AND status='active'",
@@ -189,32 +254,61 @@ export class TaskScheduler {
         "INSERT INTO worker_leases (worker_id,heartbeat_at,status) VALUES (?,?,?)",
       )
       .run(workerLeaseId, acquiredAt, "busy");
-    connection
-      .prepare(
-        "INSERT INTO execution_attempts (id,project_id,task_id,role,model_config_version,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version,role_version,policy_snapshot_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    const attempt = connection
+      .prepare("SELECT * FROM execution_attempts WHERE id=?")
+      .get(grant.attemptId) as AttemptRow | undefined;
+    if (attempt) {
+      if (
+        attempt.project_id !== grant.projectId ||
+        attempt.task_id !== grant.taskId ||
+        attempt.role !== grant.roleId ||
+        attempt.model_config_version !== grant.modelConfigVersion ||
+        attempt.workspace_ref !== grant.workspaceRef ||
+        attempt.trace_id !== grant.traceId ||
+        attempt.role_version !== grant.roleVersion
       )
-      .run(
-        grant.attemptId,
-        grant.projectId,
-        grant.taskId,
-        grant.roleId,
-        grant.modelConfigVersion,
-        grant.workspaceRef,
-        workerLeaseId,
-        "running",
-        acquiredAt,
-        null,
-        null,
-        0,
-        grant.traceId,
-        1,
-        grant.roleVersion,
-        JSON.stringify({
-          toolPolicy: grant.toolPolicy,
-          commandPolicy: grant.commandPolicy,
-          grantId: grant.grantId,
-        }),
-      );
+        throw schedulerBlocked("Attempt 已绑定不一致的执行授权", {
+          attemptId: grant.attemptId,
+        });
+      if (attempt.status !== "created")
+        throw schedulerBlocked("Attempt 已经开始或结束，不能重新领取", {
+          attemptId: grant.attemptId,
+          status: attempt.status,
+        });
+      connection
+        .prepare(
+          "UPDATE execution_attempts SET worker_lease_id=?,status='running',started_at=?,version=version+1,policy_snapshot_json=? WHERE id=? AND status='created'",
+        )
+        .run(
+          workerLeaseId,
+          acquiredAt,
+          JSON.stringify(policySnapshot),
+          grant.attemptId,
+        );
+    } else {
+      connection
+        .prepare(
+          "INSERT INTO execution_attempts (id,project_id,task_id,role,model_config_version,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version,role_version,policy_snapshot_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          grant.attemptId,
+          grant.projectId,
+          grant.taskId,
+          grant.roleId,
+          grant.modelConfigVersion,
+          grant.workspaceRef,
+          workerLeaseId,
+          "running",
+          acquiredAt,
+          null,
+          null,
+          0,
+          grant.traceId,
+          1,
+          grant.roleVersion,
+          JSON.stringify(policySnapshot),
+        );
+    }
     connection
       .prepare(
         "UPDATE tasks SET status=?,started_at=?,version=? WHERE id=? AND version=?",
@@ -232,17 +326,18 @@ export class TaskScheduler {
       projectId: grant.projectId,
       taskId: grant.taskId,
       roleId: grant.roleId,
-      taskVersion: version,
+      taskVersion: grant.taskVersion,
       workspaceRef: grant.workspaceRef,
       acquiredAt,
       heartbeatAt: acquiredAt,
       expiresAt: grant.leaseExpiresAt,
+      grantExpiresAt: grant.expiresAt,
       status: "active" as const,
       traceId: grant.traceId,
     };
     connection
       .prepare(
-        "INSERT INTO workflow_leases (id,project_id,task_id,attempt_id,role_id,task_version,workspace_ref,trace_id,acquired_at,heartbeat_at,expires_at,status,release_result,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO workflow_leases (id,project_id,task_id,attempt_id,role_id,task_version,workspace_ref,trace_id,acquired_at,heartbeat_at,expires_at,grant_expires_at,status,release_result,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         lease.leaseId,
@@ -256,6 +351,7 @@ export class TaskScheduler {
         lease.acquiredAt,
         lease.heartbeatAt,
         lease.expiresAt,
+        grant.expiresAt,
         lease.status,
         null,
         1,
@@ -281,9 +377,13 @@ export class TaskScheduler {
         attemptId,
         status: row.status,
       });
-    if (parseDate(row.expires_at, "expires_at") <= now) {
+    const leaseExpiresAt = parseDate(row.expires_at, "expires_at");
+    const grantExpiresAt = parseDate(row.grant_expires_at, "grant_expires_at");
+    if (leaseExpiresAt <= now || grantExpiresAt <= now) {
+      // 修改日期：2026-08-16
+      // 修改原因：心跳请求即使发现过期也必须先持久化租约和 Attempt 的终止状态，避免重复心跳反复看到 RUNNING 假象。
       this.expireLease(connection, row, now);
-      throw schedulerBlocked("租约已经过期，不能继续执行", { attemptId });
+      return leaseFromRow(this.leaseRow(connection, attemptId));
     }
     if (
       !Number.isInteger(extensionMs) ||
@@ -292,7 +392,11 @@ export class TaskScheduler {
     )
       throw schedulerBlocked("心跳延长时间超出允许范围", { extensionMs });
     const heartbeatAt = now.toISOString();
-    const expiresAt = new Date(now.valueOf() + extensionMs).toISOString();
+    const requestedExpiresAt = new Date(now.valueOf() + extensionMs);
+    const expiresAt =
+      requestedExpiresAt <= grantExpiresAt
+        ? requestedExpiresAt.toISOString()
+        : row.grant_expires_at;
     connection
       .prepare(
         "UPDATE workflow_leases SET heartbeat_at=?,expires_at=?,version=version+1 WHERE attempt_id=? AND status='active'",
@@ -328,9 +432,20 @@ export class TaskScheduler {
         reason: row.release_result ?? "租约已处理",
       };
     }
-    if (parseDate(row.expires_at, "expires_at") <= now) {
+    const leaseExpiresAt = parseDate(row.expires_at, "expires_at");
+    const grantExpiresAt = parseDate(row.grant_expires_at, "grant_expires_at");
+    if (leaseExpiresAt <= now || grantExpiresAt <= now) {
+      // 修改日期：2026-08-16
+      // 修改原因：过期结果不能回写任务，但过期事实必须在事务提交后保留，供恢复和审计判断。
       this.expireLease(connection, row, now);
-      throw schedulerBlocked("租约已过期，结果不能提交", { attemptId });
+      const expired = this.leaseRow(connection, attemptId);
+      return {
+        lease: leaseFromRow(expired),
+        taskStatus: TaskStatus.BLOCKED,
+        retryScheduled: false,
+        nextRunnableTaskId: this.nextRunnableTask(connection, row.project_id),
+        reason: "租约已过期，结果未提交",
+      };
     }
     const task = this.taskRow(connection, row.task_id);
     if (!task)
@@ -477,10 +592,62 @@ export class TaskScheduler {
   ): void {
     const member = connection
       .prepare(
-        "SELECT 1 FROM organization_members WHERE role_id=? AND status='available' LIMIT 1",
+        "SELECT 1 FROM organization_members om JOIN role_definitions rd ON rd.role_id=om.role_id WHERE om.role_id=? AND om.status='available' AND om.role_version=rd.role_version AND rd.enabled=1 LIMIT 1",
       )
       .get(roleId);
     if (!member) throw schedulerBlocked("责任岗位当前不可用", { roleId });
+  }
+
+  /** 将 Worker 提交的 Grant 收敛到服务端岗位策略，调用方只能缩小权限。 */
+  private assertGrantPolicyBound(
+    connection: BetterSqlite3.Database,
+    task: TaskRow,
+    grant: ExecutionGrant,
+  ): GrantPolicySnapshot {
+    if (task.owner_role !== grant.roleId)
+      throw schedulerBlocked("Grant 的角色不是任务责任岗位", {
+        taskId: task.id,
+        ownerRole: task.owner_role,
+        roleId: grant.roleId,
+      });
+    const role = connection
+      .prepare(
+        "SELECT role_id,role_version,enabled,allowed_tools_json,command_policy_json FROM role_definitions WHERE role_id=?",
+      )
+      .get(grant.roleId) as RolePolicyRow | undefined;
+    if (!role || role.enabled !== 1 || role.role_version !== grant.roleVersion)
+      throw schedulerBlocked("Grant 的岗位策略版本无效或已停用", {
+        roleId: grant.roleId,
+        expectedRoleVersion: role?.role_version ?? null,
+        actualRoleVersion: grant.roleVersion,
+      });
+    const allowedTools = parsePolicyStringArray(
+      role.allowed_tools_json,
+      "allowed_tools_json",
+    );
+    const commandPolicy = parseCommandPolicy(role.command_policy_json);
+    if (
+      grant.toolPolicy.some(
+        (tool) => typeof tool !== "string" || !allowedTools.includes(tool),
+      ) ||
+      grant.commandPolicy.some(
+        (command) =>
+          typeof command !== "string" ||
+          !commandPolicy.allowedCommands.includes(command) ||
+          commandPolicy.forbiddenCommands.includes(command),
+      )
+    )
+      throw schedulerBlocked("Grant 的工具或命令策略超出岗位策略", {
+        roleId: grant.roleId,
+        roleVersion: grant.roleVersion,
+      });
+    return {
+      roleId: role.role_id,
+      roleVersion: role.role_version,
+      allowedTools,
+      commandPolicy,
+      grantId: grant.grantId,
+    };
   }
 
   /** 失败次数来自不可变 Attempt 历史，避免把重试计数写入可覆盖的任务摘要。 */
@@ -596,6 +763,24 @@ export class TaskScheduler {
   }
 }
 
+/** 将已持久化的过期结果转换为 API 层的稳定工作流拒绝。 */
+export function assertLeaseActive(lease: TaskLease): void {
+  if (lease.status === "expired")
+    throw schedulerBlocked("租约已经过期，不能继续执行", {
+      attemptId: lease.attemptId,
+    });
+}
+
+/** 将过期释放结果转换为 API 层的稳定工作流拒绝。 */
+export function assertScheduleDecisionAccepted(
+  decision: ScheduleDecision,
+): void {
+  if (decision.lease.status === "expired")
+    throw schedulerBlocked("租约已过期，结果不能提交", {
+      attemptId: decision.lease.attemptId,
+    });
+}
+
 /** 释放结果的最小契约；模型/工具输出不能直接改变业务状态。 */
 export type ReleaseResult = {
   status: "succeeded" | "failed";
@@ -607,6 +792,7 @@ export type ReleaseResult = {
 type TaskRow = {
   id: string;
   project_id: string;
+  owner_role: string;
   priority: string;
   status: string;
   dependencies_json: string;
@@ -625,9 +811,40 @@ type LeaseRow = {
   acquired_at: string;
   heartbeat_at: string;
   expires_at: string;
+  grant_expires_at: string;
   status: "active" | "released" | "expired";
   release_result: string | null;
   version: number;
+};
+
+type AttemptRow = {
+  project_id: string;
+  task_id: string;
+  role: string;
+  model_config_version: string;
+  workspace_ref: string;
+  trace_id: string;
+  status: string;
+  role_version: number;
+};
+
+type RolePolicyRow = {
+  role_id: string;
+  role_version: number;
+  enabled: number;
+  allowed_tools_json: string;
+  command_policy_json: string;
+};
+
+type GrantPolicySnapshot = {
+  roleId: string;
+  roleVersion: number;
+  allowedTools: string[];
+  commandPolicy: {
+    allowedCommands: string[];
+    forbiddenCommands: string[];
+  };
+  grantId: string;
 };
 
 function leaseFromRow(row: LeaseRow): TaskLease {
@@ -642,6 +859,7 @@ function leaseFromRow(row: LeaseRow): TaskLease {
     acquiredAt: row.acquired_at,
     heartbeatAt: row.heartbeat_at,
     expiresAt: row.expires_at,
+    grantExpiresAt: row.grant_expires_at,
     status: row.status,
     traceId: row.trace_id,
   };
@@ -665,6 +883,47 @@ function parseDate(value: string, field: string): Date {
   if (!value || Number.isNaN(date.valueOf()))
     throw schedulerBlocked(`${field} 不是有效时间`, { field });
   return date;
+}
+
+/** 解析并冻结岗位工具白名单，坏的岗位策略默认阻断领取。 */
+function parsePolicyStringArray(value: string, field: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((item) => typeof item !== "string" || !item.trim())
+    )
+      throw new Error("invalid policy array");
+    return parsed;
+  } catch (_error) {
+    throw schedulerBlocked("岗位策略数据无效，不能生成执行授权", { field });
+  }
+}
+
+/** 解析岗位命令白名单和禁用命令，避免 Grant 自带策略扩大权限。 */
+function parseCommandPolicy(value: string): {
+  allowedCommands: string[];
+  forbiddenCommands: string[];
+} {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const allowedCommands = parsed.allowedCommands;
+    const forbiddenCommands = parsed.forbiddenCommands;
+    if (
+      !Array.isArray(allowedCommands) ||
+      !Array.isArray(forbiddenCommands) ||
+      allowedCommands.some(
+        (item) => typeof item !== "string" || !item.trim(),
+      ) ||
+      forbiddenCommands.some((item) => typeof item !== "string" || !item.trim())
+    )
+      throw new Error("invalid command policy");
+    return { allowedCommands, forbiddenCommands };
+  } catch (_error) {
+    throw schedulerBlocked("岗位命令策略数据无效，不能生成执行授权", {
+      field: "command_policy_json",
+    });
+  }
 }
 
 function schedulerBlocked(

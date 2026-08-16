@@ -9,6 +9,8 @@ import {
   TaskScheduler,
   ExecutionGrant,
   ReleaseResult,
+  assertLeaseActive,
+  assertScheduleDecisionAccepted,
 } from "../workflow/scheduler.js";
 import { createRequestTraceId } from "./request-trace.js";
 import {
@@ -220,9 +222,11 @@ export function registerWorkflowRoutes(
       ),
       traceId,
     );
-    return app.runtime.database.transaction((connection) =>
+    const lease = app.runtime.database.transaction((connection) =>
       scheduler.claim(connection, grant),
     );
+    assertLeaseActive(lease);
+    return lease;
   });
 
   app.post("/api/v1/attempts/:attemptId/heartbeat", async (request) => {
@@ -236,9 +240,11 @@ export function registerWorkflowRoutes(
     const body = requireRecord(request.body, "body", traceId);
     const extensionMs =
       body.extensionMs == null ? 30_000 : Number(body.extensionMs);
-    return app.runtime.database.transaction((connection) =>
+    const lease = app.runtime.database.transaction((connection) =>
       scheduler.heartbeat(connection, attemptId, new Date(), extensionMs),
     );
+    assertLeaseActive(lease);
+    return lease;
   });
 
   app.post("/api/v1/attempts/:attemptId/release", async (request) => {
@@ -263,9 +269,11 @@ export function registerWorkflowRoutes(
           ? undefined
           : requireString(body.failureReason, "failureReason", traceId),
     };
-    return app.runtime.database.transaction((connection) =>
+    const decision = app.runtime.database.transaction((connection) =>
       scheduler.release(connection, attemptId, result),
     );
+    assertScheduleDecisionAccepted(decision);
+    return decision;
   });
 }
 

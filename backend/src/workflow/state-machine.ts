@@ -153,6 +153,16 @@ export function assertTaskTransition(
       reason: "evidence_required",
     });
   }
+  // 修改日期：2026-08-16
+  // 修改原因：任务进入 Review 前必须先完成执行证据，防止 Worker 用不完整结果绕过交接门禁。
+  if (to === TaskStatus.WAITING_REVIEW && context.evidenceComplete === false) {
+    throw workflowBlocked("任务缺少必需证据，不能提交 Review", {
+      aggregateType: "task",
+      from,
+      to,
+      reason: "evidence_required_for_review",
+    });
+  }
   if (to === TaskStatus.RUNNING && context.dependenciesSatisfied === false) {
     throw workflowBlocked("任务依赖未满足，不能开始执行", {
       aggregateType: "task",

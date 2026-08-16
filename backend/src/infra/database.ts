@@ -25,6 +25,7 @@ import {
   migrateIntegritySchema,
   migrateOrganizationSchema,
   migrateRuntimeSchema,
+  migrateWorkflowHardeningSchema,
   ORGANIZATION_INDEX_DEFINITIONS,
   WORKFLOW_INDEX_DEFINITIONS,
   WORKFLOW_REQUIRED_INDEX_NAMES,
@@ -177,6 +178,7 @@ export class Database {
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -201,6 +203,7 @@ export class Database {
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -224,6 +227,7 @@ export class Database {
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -246,6 +250,7 @@ export class Database {
           );
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -267,12 +272,34 @@ export class Database {
             "修复迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
+      } else if (current === "0005_task4_workflow") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0005_task4_workflow",
+          "备份持久化根目录并沿批准路径升级到 0006_task4_workflow_hardening",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -703,6 +730,7 @@ export class Database {
         "acquired_at",
         "heartbeat_at",
         "expires_at",
+        "grant_expires_at",
         "status",
         "release_result",
         "version",
@@ -718,6 +746,7 @@ export class Database {
         "recommendation",
         "status",
         "approval_id",
+        "response_task_id",
         "created_at",
         "resolved_at",
         "version",

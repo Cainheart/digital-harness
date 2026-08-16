@@ -503,6 +503,7 @@ export function migrateWorkflowSchema(db: BetterSqlite3.Database): void {
       acquired_at TEXT NOT NULL,
       heartbeat_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
+      grant_expires_at TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('active','released','expired')),
       release_result TEXT,
       version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
@@ -519,6 +520,7 @@ export function migrateWorkflowSchema(db: BetterSqlite3.Database): void {
       recommendation TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('open','resolved')),
       approval_id TEXT,
+      response_task_id TEXT,
       created_at TEXT NOT NULL,
       resolved_at TEXT,
       version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
@@ -559,6 +561,30 @@ export function migrateWorkflowSchema(db: BetterSqlite3.Database): void {
     db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0005_task4_workflow",
+  );
+}
+
+/** 为已有 Task 4 数据库补齐租约原始期限和一般风险响应任务关联。 */
+export function migrateWorkflowHardeningSchema(
+  db: BetterSqlite3.Database,
+): void {
+  const leaseColumns = db
+    .prepare("PRAGMA table_info(workflow_leases)")
+    .all() as { name: string }[];
+  if (!leaseColumns.some((column) => column.name === "grant_expires_at"))
+    db.exec(
+      "ALTER TABLE workflow_leases ADD COLUMN grant_expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'",
+    );
+  db.exec(
+    "UPDATE workflow_leases SET grant_expires_at=expires_at WHERE grant_expires_at='1970-01-01T00:00:00.000Z'",
+  );
+  const riskColumns = db.prepare("PRAGMA table_info(workflow_risks)").all() as {
+    name: string;
+  }[];
+  if (!riskColumns.some((column) => column.name === "response_task_id"))
+    db.exec("ALTER TABLE workflow_risks ADD COLUMN response_task_id TEXT");
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0006_task4_workflow_hardening",
   );
 }
 
