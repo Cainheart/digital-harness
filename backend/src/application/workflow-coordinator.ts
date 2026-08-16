@@ -18,6 +18,7 @@ import {
   ApprovalType,
   rejectedTestReleaseTarget,
   WorkflowStage,
+  WORKFLOW_STAGES,
   isWorkflowStage,
 } from "../workflow/fixed-workflow.js";
 import {
@@ -712,6 +713,58 @@ export class WorkflowCoordinator {
         "SELECT COUNT(*) AS total,SUM(status NOT IN ('closed','resolved')) AS open FROM defects WHERE project_id=?",
       )
       .get(projectId) as { total: number; open: number };
+    const phaseIndex = WORKFLOW_STAGES.indexOf(project.stage as WorkflowStage);
+    const phases = WORKFLOW_STAGES.map((stage, index) => ({
+      stage,
+      status: phaseStatus(index, phaseIndex, project.status),
+      isCurrent: index === phaseIndex,
+    }));
+    const employees = connection
+      .prepare(
+        `SELECT m.instance_id,m.display_name,m.role_id,m.specialist_tag,m.office_zone,
+                m.desk_group,m.status AS member_status,r.title,
+                t.id AS task_id,t.title AS task_title,t.status AS task_status,
+                t.started_at,t.owner_role
+         FROM organization_members m
+         JOIN role_definitions r ON r.role_id=m.role_id
+         LEFT JOIN tasks t ON t.project_id=? AND t.owner_role=m.role_id
+           AND t.status IN ('待处理','进行中','等待 Review','等待审批','阻塞','返工')
+         ORDER BY m.office_zone,m.desk_group,m.instance_id,t.created_at DESC`,
+      )
+      .all(projectId) as EmployeeRow[];
+    const modelSummary = connection
+      .prepare(
+        `SELECT COUNT(*) AS call_count,
+                COALESCE(SUM(duration_ms),0) AS duration_ms,
+                COALESCE(SUM(error_code IS NOT NULL),0) AS errors,
+                COALESCE(SUM(total_tokens),0) AS total_tokens,
+                COALESCE(SUM(cost_micros),0) AS cost_micros
+         FROM model_calls WHERE project_id=?`,
+      )
+      .get(projectId) as ModelSummaryRow;
+    const latestArtifacts = connection
+      .prepare(
+        `SELECT a.id,a.name,a.artifact_type,a.status,a.owner_role,a.task_id,
+                av.id AS version_id,av.version_number,av.created_at,av.sha256,av.size_bytes
+         FROM artifacts a
+         LEFT JOIN artifact_versions av ON av.id=(
+           SELECT av2.id FROM artifact_versions av2
+           WHERE av2.artifact_id=a.id ORDER BY av2.version_number DESC LIMIT 1
+         )
+         WHERE a.project_id=? ORDER BY COALESCE(av.created_at,a.created_at) DESC,a.id DESC LIMIT 10`,
+      )
+      .all(projectId) as ArtifactDashboardRow[];
+    const risks = connection
+      .prepare(
+        "SELECT id,task_id,severity,reason,impact_scope_json,evidence_json,recommendation,status,approval_id,response_task_id,created_at,resolved_at FROM workflow_risks WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 20",
+      )
+      .all(projectId) as RiskDashboardRow[];
+    const pause = connection
+      .prepare(
+        "SELECT reason,impact_scope_json,waiting_for,available_actions_json,recovery_condition,status,created_at,resolved_at FROM workflow_pauses WHERE project_id=? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(projectId) as PauseDashboardRow | undefined;
+    const eventItems = this.events.listAfter(connection, null, projectId, 10);
     return {
       project,
       tasks,
@@ -723,6 +776,19 @@ export class WorkflowCoordinator {
         taskRework: counts.rework ?? 0,
         defectTotal: defects.total,
         openDefects: defects.open ?? 0,
+      },
+      phases,
+      employees: employeeViews(employees),
+      risks: risks.map(parseRiskDashboardRow),
+      pause: pause ? parsePauseDashboardRow(pause) : null,
+      latestArtifacts,
+      latestEvents: eventItems,
+      modelSummary: {
+        callCount: modelSummary.call_count,
+        durationMs: modelSummary.duration_ms,
+        errors: modelSummary.errors,
+        totalTokens: modelSummary.total_tokens,
+        costMicros: modelSummary.cost_micros,
       },
       allowedActions: allowedProjectActions(project.status),
       nextAction: this.nextAction(project, approvals),
@@ -772,6 +838,7 @@ export class WorkflowCoordinator {
         readAt: row.read_at,
         handledBy: row.handled_by,
         handledAt: row.handled_at,
+        version: row.version,
       })),
       nextCursor: hasMore ? (visible.at(-1)?.id ?? null) : null,
       hasMore,
@@ -779,15 +846,83 @@ export class WorkflowCoordinator {
   }
 
   /** 标记已阅但不自动关闭仍需业务处理的通知。 */
-  markNotificationRead(notificationId: string): Record<string, unknown> {
+  markNotificationRead(
+    notificationId: string,
+    input?: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!input) return this.markNotificationReadLegacy(notificationId);
+    const command = this.command(input, notificationId);
+    assertBoss(command.actor);
+    const requestHash = canonicalRequestHash(command);
+    return this.database.transaction((connection) => {
+      const existing = this.idempotency.get(connection, command.idempotencyKey);
+      if (existing)
+        return this.idempotency.assertReusable(
+          existing,
+          requestHash,
+          `trace_${command.commandId}`,
+        );
+      const row = this.notificationRow(connection, notificationId);
+      if (row.version !== command.expectedVersion)
+        throw new VersionConflictError("通知版本已变化，未覆盖最新状态", {
+          data: {
+            expectedVersion: command.expectedVersion,
+            actualVersion: row.version,
+          },
+        });
+      const readAt = row.read_at ?? utcNow();
+      const nextVersion = row.unread ? row.version + 1 : row.version;
+      if (row.unread) {
+        connection
+          .prepare(
+            "UPDATE notifications SET unread=0,read_at=?,version=version+1 WHERE id=? AND version=?",
+          )
+          .run(readAt, notificationId, row.version);
+      }
+      const result = {
+        aggregateId: notificationId,
+        version: nextVersion,
+        eventId: "",
+        allowedActions: [],
+        traceId: `trace_${command.commandId}`,
+      };
+      this.idempotency.save(connection, {
+        id: newObjectId("idempotency"),
+        projectId: row.project_id,
+        idempotencyKey: command.idempotencyKey,
+        commandId: command.commandId,
+        aggregateType: "notification",
+        aggregateId: notificationId,
+        requestHash,
+        commandResult: result,
+        eventId: null,
+        createdAt: utcNow(),
+      });
+      return result;
+    });
+  }
+
+  /** 兼容 Task 3/4 已有的无命令信封通知已阅接口。 */
+  private markNotificationReadLegacy(
+    notificationId: string,
+  ): Record<string, unknown> {
     return this.database.transaction((connection) => {
       const row = this.notificationRow(connection, notificationId);
-      connection
-        .prepare(
-          "UPDATE notifications SET unread=0,read_at=COALESCE(read_at,?) WHERE id=?",
-        )
-        .run(utcNow(), notificationId);
-      return { ...row, unread: false, readAt: row.read_at ?? utcNow() };
+      const readAt = row.read_at ?? utcNow();
+      if (row.unread) {
+        connection
+          .prepare(
+            "UPDATE notifications SET unread=0,read_at=?,version=version+1 WHERE id=? AND version=?",
+          )
+          .run(readAt, notificationId, row.version);
+      }
+      return {
+        ...row,
+        unread: false,
+        read_at: readAt,
+        version: row.unread ? row.version + 1 : row.version,
+        readAt,
+      };
     });
   }
 
@@ -813,7 +948,7 @@ export class WorkflowCoordinator {
       const handledAt = utcNow();
       connection
         .prepare(
-          "UPDATE notifications SET unread=0,pending=0,handled_by=?,action=?,handled_at=?,read_at=COALESCE(read_at,?) WHERE id=? AND pending=1",
+          "UPDATE notifications SET unread=0,pending=0,handled_by=?,action=?,handled_at=?,read_at=COALESCE(read_at,?),version=version+1 WHERE id=? AND pending=1",
         )
         .run(handledBy, action, handledAt, handledAt, notificationId);
       return this.notificationRow(connection, notificationId);
@@ -1933,9 +2068,9 @@ export class WorkflowCoordinator {
     const insertNotificationSql = `
       INSERT INTO notifications (
         id, project_id, event_id, notification_type, severity, subject_type,
-        subject_id, unread, pending, handled_by, action, created_at, read_at, handled_at
+        subject_id, unread, pending, handled_by, action, created_at, read_at, handled_at, version
       )
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM notifications WHERE event_id = ?
       )
@@ -1957,6 +2092,7 @@ export class WorkflowCoordinator {
         utcNow(),
         null,
         null,
+        1,
         eventId,
       );
   }
@@ -1971,7 +2107,7 @@ export class WorkflowCoordinator {
     const handledAt = utcNow();
     connection
       .prepare(
-        "UPDATE notifications SET unread=0,pending=0,handled_by=?,action=?,handled_at=?,read_at=COALESCE(read_at,?) WHERE subject_type='approval' AND subject_id=? AND pending=1",
+        "UPDATE notifications SET unread=0,pending=0,handled_by=?,action=?,handled_at=?,read_at=COALESCE(read_at,?),version=version+1 WHERE subject_type='approval' AND subject_id=? AND pending=1",
       )
       .run(
         handledBy,
@@ -2024,6 +2160,71 @@ export class WorkflowCoordinator {
   }
 }
 
+/** 员工看板查询中允许展示的持久化字段；不包含岗位策略和敏感上下文。 */
+type EmployeeRow = {
+  instance_id: string;
+  display_name: string;
+  role_id: string;
+  specialist_tag: string;
+  office_zone: string;
+  desk_group: string;
+  member_status: string;
+  title: string;
+  task_id: string | null;
+  task_title: string | null;
+  task_status: string | null;
+  started_at: string | null;
+  owner_role: string | null;
+};
+/** 看板模型调用统计查询的聚合字段。 */
+type ModelSummaryRow = {
+  call_count: number;
+  duration_ms: number;
+  errors: number;
+  total_tokens: number;
+  cost_micros: number;
+};
+/** 看板最新交付物查询的脱敏字段。 */
+type ArtifactDashboardRow = {
+  id: string;
+  name: string;
+  artifact_type: string;
+  status: string;
+  owner_role: string;
+  task_id: string | null;
+  version_id: string | null;
+  version_number: number | null;
+  created_at: string;
+  sha256: string | null;
+  size_bytes: number | null;
+};
+/** 看板风险查询的持久化字段；JSON 摘要在边界函数中解析。 */
+type RiskDashboardRow = {
+  id: string;
+  task_id: string | null;
+  severity: string;
+  reason: string;
+  impact_scope_json: string;
+  evidence_json: string;
+  recommendation: string;
+  status: string;
+  approval_id: string | null;
+  response_task_id: string | null;
+  created_at: string;
+  resolved_at: string | null;
+};
+/** 看板暂停查询的固定字段。 */
+type PauseDashboardRow = {
+  reason: string;
+  impact_scope_json: string;
+  waiting_for: string;
+  available_actions_json: string;
+  recovery_condition: string;
+  status: string;
+  created_at: string;
+  resolved_at: string | null;
+};
+
 /** 创建项目/命令响应中的通知输入，不能携带凭据或任意事件正文。 */
 type NotificationInput = {
   notificationType: string;
@@ -2068,6 +2269,7 @@ type TerminationRow = {
   reason: string;
   expires_at: string;
 };
+/** 通知事实表与事件摘要联查后的内部行。 */
 type NotificationRow = {
   id: string;
   project_id: string;
@@ -2083,6 +2285,7 @@ type NotificationRow = {
   created_at: string;
   read_at: string | null;
   handled_at: string | null;
+  version: number;
   payload_json?: string;
   trace_id?: string;
 };
@@ -2163,6 +2366,95 @@ function allowedProjectActions(status: ProjectStatus): string[] {
   if (status === ProjectStatus.CLOSING) return ["terminate_preview"];
   return [];
 }
+
+/** 根据当前持久化阶段和项目状态生成可解释的阶段投影。 */
+function phaseStatus(
+  index: number,
+  currentIndex: number,
+  projectStatus: ProjectStatus,
+): string {
+  if (projectStatus === ProjectStatus.TERMINATED) return "已终止";
+  if (projectStatus === ProjectStatus.COMPLETED) return "已完成";
+  if (index < currentIndex) return "已完成";
+  if (index > currentIndex) return "未开始";
+  if (projectStatus === ProjectStatus.WAITING_BOSS) return "等待人工";
+  if (projectStatus === ProjectStatus.BLOCKED) return "阻塞";
+  if (projectStatus === ProjectStatus.PAUSED) return "已暂停";
+  return "进行中";
+}
+
+/** 将一对多任务查询收敛为每位员工一条展示记录，避免页面重复员工卡片。 */
+function employeeViews(rows: EmployeeRow[]): Array<Record<string, unknown>> {
+  const byMember = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    if (!byMember.has(row.instance_id)) {
+      byMember.set(row.instance_id, {
+        instanceId: row.instance_id,
+        displayName: row.display_name,
+        roleId: row.role_id,
+        title: row.title,
+        specialistTag: row.specialist_tag,
+        officeZone: row.office_zone,
+        deskGroup: row.desk_group,
+        status: row.member_status,
+        currentTask: row.task_id
+          ? {
+              id: row.task_id,
+              title: row.task_title,
+              status: row.task_status,
+              startedAt: row.started_at,
+            }
+          : null,
+      });
+    }
+  }
+  return [...byMember.values()];
+}
+
+/** 解析风险 JSON 摘要，坏数据只影响该卡片而不会把原始 JSON 直接暴露到 UI。 */
+function parseRiskDashboardRow(row: RiskDashboardRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    severity: row.severity,
+    reason: row.reason,
+    impactScope: parseStringArray(row.impact_scope_json),
+    evidence: parseStringArray(row.evidence_json),
+    recommendation: row.recommendation,
+    status: row.status,
+    approvalId: row.approval_id,
+    responseTaskId: row.response_task_id,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+  };
+}
+
+/** 解析暂停投影的固定字段，保持原因、影响、等待对象和恢复条件成组返回。 */
+function parsePauseDashboardRow(row: PauseDashboardRow): Record<string, unknown> {
+  return {
+    reason: row.reason,
+    impactScope: parseStringArray(row.impact_scope_json),
+    waitingFor: row.waiting_for,
+    availableActions: parseStringArray(row.available_actions_json),
+    recoveryCondition: row.recovery_condition,
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+  };
+}
+
+/** 解析持久化数组字段并对异常内容使用空数组，避免渲染内部原文。 */
+function parseStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
 function nextStageOrThrow(stage: string): string {
   const order = Object.values(WorkflowStage);
   const index = order.indexOf(stage as WorkflowStage);

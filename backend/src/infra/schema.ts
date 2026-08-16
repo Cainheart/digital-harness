@@ -96,6 +96,7 @@ export const WORKFLOW_TABLE_ORDER = [
   "workflow_risks",
   "workflow_checkpoints",
   "termination_confirmations",
+  "archive_deletion_confirmations",
 ] as const;
 /** 用于启动完整性检查的工作流表集合。 */
 export const WORKFLOW_TABLES = new Set<string>(WORKFLOW_TABLE_ORDER);
@@ -126,6 +127,14 @@ export const WORKFLOW_INDEX_DEFINITIONS = [
   [
     "termination_confirmations",
     "ix_termination_confirmations_project_status",
+    "project_id,status",
+  ],
+] as const;
+/** Task 9 历史删除确认的项目/状态查询索引。 */
+export const ARCHIVE_INDEX_DEFINITIONS = [
+  [
+    "archive_deletion_confirmations",
+    "ix_archive_deletion_confirmations_project_status",
     "project_id,status",
   ],
 ] as const;
@@ -524,7 +533,7 @@ export function migrateDomainSchema(db: BetterSqlite3.Database): void {
     CREATE TABLE IF NOT EXISTS model_calls (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT, execution_attempt_id TEXT NOT NULL, role TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, summary TEXT NOT NULL, error_code TEXT, input_tokens INTEGER, output_tokens INTEGER, cost_micros INTEGER, trace_id TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,execution_attempt_id) REFERENCES execution_attempts(project_id,id));
     CREATE TABLE IF NOT EXISTS tool_calls (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT, execution_attempt_id TEXT NOT NULL, role TEXT NOT NULL, tool_name TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_ms INTEGER, summary TEXT NOT NULL, error_code TEXT, trace_id TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,execution_attempt_id) REFERENCES execution_attempts(project_id,id));
     CREATE TABLE IF NOT EXISTS domain_events (event_id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), event_type TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, aggregate_version INTEGER NOT NULL CONSTRAINT ck_domain_events_aggregate_version_nonnegative CHECK (aggregate_version >= 0), global_sequence INTEGER NOT NULL CONSTRAINT ck_domain_events_global_sequence_nonnegative CHECK (global_sequence >= 0), occurred_at TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_domain_events_duration_nonnegative CHECK (duration_ms >= 0), actor_type TEXT NOT NULL, actor_id TEXT NOT NULL, input_summary TEXT NOT NULL, output_summary TEXT NOT NULL, result TEXT NOT NULL, failure TEXT, retry_count INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_domain_events_retry_nonnegative CHECK (retry_count >= 0), trace_id TEXT NOT NULL, attempt_id TEXT, rejection_reason TEXT, redaction_reason TEXT, event_category TEXT NOT NULL DEFAULT 'ordinary' CONSTRAINT ck_domain_events_event_category CHECK (event_category IN ('ordinary','call','security')), payload_json TEXT NOT NULL CONSTRAINT ck_domain_events_payload_json CHECK (json_valid(payload_json) = 1), UNIQUE(aggregate_type,aggregate_id,aggregate_version), UNIQUE(project_id,event_id), UNIQUE(global_sequence));
-    CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), event_id TEXT NOT NULL, notification_type TEXT NOT NULL, severity TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, unread INTEGER NOT NULL DEFAULT 1, pending INTEGER NOT NULL DEFAULT 1, handled_by TEXT, action TEXT, created_at TEXT NOT NULL, read_at TEXT, handled_at TEXT, FOREIGN KEY(project_id,event_id) REFERENCES domain_events(project_id,event_id));
+    CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), event_id TEXT NOT NULL, notification_type TEXT NOT NULL, severity TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, unread INTEGER NOT NULL DEFAULT 1, pending INTEGER NOT NULL DEFAULT 1, handled_by TEXT, action TEXT, created_at TEXT NOT NULL, read_at TEXT, handled_at TEXT, version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1), FOREIGN KEY(project_id,event_id) REFERENCES domain_events(project_id,event_id));
     CREATE TABLE IF NOT EXISTS outbox_messages (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), event_id TEXT NOT NULL, topic TEXT NOT NULL, payload_json TEXT NOT NULL CONSTRAINT ck_outbox_messages_payload_json CHECK (json_valid(payload_json) = 1), created_at TEXT NOT NULL, published_at TEXT, status TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0 CONSTRAINT ck_outbox_messages_retry_nonnegative CHECK (retry_count >= 0), last_error TEXT, available_at TEXT, UNIQUE(event_id), FOREIGN KEY(project_id,event_id) REFERENCES domain_events(project_id,event_id));
     CREATE TABLE IF NOT EXISTS idempotency_records (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), idempotency_key TEXT NOT NULL UNIQUE, command_id TEXT NOT NULL, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, request_hash TEXT NOT NULL, response_json TEXT NOT NULL CONSTRAINT ck_idempotency_records_response_json CHECK (json_valid(response_json) = 1), event_id TEXT, created_at TEXT NOT NULL, FOREIGN KEY(project_id,event_id) REFERENCES domain_events(project_id,event_id));
     CREATE TABLE IF NOT EXISTS trace_links (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_type TEXT NOT NULL, source_id TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL, relation TEXT NOT NULL, trace_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(source_type,source_id,target_type,target_id,relation));
@@ -1313,6 +1322,38 @@ export function migrateQualityTraceLinkTriggers(
       true,
       true,
     ),
+  );
+}
+
+/** 创建 Task 9 历史删除二次确认事实；确认 token 只保存哈希并可在重启后继续校验。 */
+export function migrateArchiveConsoleSchema(
+  db: BetterSqlite3.Database,
+): void {
+  addColumnIfMissing(
+    db,
+    "notifications",
+    "version",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)",
+  );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS archive_deletion_confirmations (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      token_hash TEXT NOT NULL UNIQUE,
+      expected_version INTEGER NOT NULL CHECK (expected_version >= 1),
+      actor_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('previewed','confirmed','expired')),
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      UNIQUE(project_id, id)
+    );
+  `);
+  for (const [table, index, columns] of ARCHIVE_INDEX_DEFINITIONS)
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0011_task9_archive_console",
   );
 }
 

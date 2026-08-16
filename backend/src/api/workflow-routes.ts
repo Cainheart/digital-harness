@@ -170,6 +170,25 @@ export function registerWorkflowRoutes(
     );
   });
 
+  app.post(
+    "/api/v1/notifications/:notificationId/acknowledge",
+    async (request) => {
+      const traceId = createRequestTraceId("notification-acknowledge");
+      assertLocalRequest(request, options.testMode, traceId);
+      const body = requireRecord(request.body, "body", traceId);
+      requireSafeString(body.idempotencyKey, "idempotencyKey", traceId);
+      requireExpectedVersion(body.expectedVersion, traceId);
+      return coordinator.markNotificationRead(
+        requireSafeString(
+          (request.params as { notificationId?: string }).notificationId ?? "",
+          "notificationId",
+          traceId,
+        ),
+        body,
+      );
+    },
+  );
+
   app.post("/api/v1/notifications/:notificationId/handle", async (request) => {
     const traceId = createRequestTraceId("notification-handle");
     assertLocalRequest(request, options.testMode, traceId);
@@ -288,6 +307,13 @@ function projectParam(request: FastifyRequest, traceId: string): string {
     "projectId",
     traceId,
   );
+}
+
+/** 通知确认是 Task 9 写命令，必须显式携带正整数版本。 */
+function requireExpectedVersion(value: unknown, traceId: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1)
+    throw new InvalidArgumentError("expectedVersion 必须是正整数", { traceId });
+  return Number(value);
 }
 
 /** 解析通知列表查询并限制分页资源。 */

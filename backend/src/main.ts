@@ -50,6 +50,7 @@ import { registerResearchRoutes } from "./api/research.js";
 import { ResearchWorkflow } from "./application/research-workflow.js";
 import { ResearchAdapter } from "./research/adapter.js";
 import { registerCodingRoutes } from "./api/coding.js";
+import { registerConsoleRoutes } from "./api/console-routes.js";
 import { registerQualityRoutes } from "./api/quality.js";
 import { NativeCodingHarness } from "./coding/native-harness.js";
 import { WorkspaceManager } from "./execution/workspace-manager.js";
@@ -61,6 +62,8 @@ import {
 import { VerificationOrchestrator } from "./execution/verification.js";
 import { OrganizationService } from "./application/organization-service.js";
 import { QualityFlowService } from "./application/quality-flow.js";
+import { ArchiveService } from "./application/archive-service.js";
+import { ConsoleQueryService } from "./application/console-query-service.js";
 import {
   PlaywrightResearchBrowser,
   UnavailableResearchBrowser,
@@ -90,6 +93,8 @@ export type RuntimeState = {
   researchWorkflow: ResearchWorkflow;
   codingHarness: NativeCodingHarness;
   qualityFlow: QualityFlowService;
+  consoleQueries: ConsoleQueryService;
+  archive: ArchiveService;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -178,6 +183,8 @@ export function createApp(options: {
     new ResearchAdapter(database, researchBrowser),
   );
   const organization = new OrganizationService(database);
+  const consoleQueries = new ConsoleQueryService(database);
+  const archive = new ArchiveService(database, artifactStore);
   const workspaceManager = new WorkspaceManager(settings.workspacePath);
   const fileGateway = new FileGateway(workspaceManager, artifactStore);
   const codingHarness = new NativeCodingHarness({
@@ -210,6 +217,8 @@ export function createApp(options: {
     researchWorkflow,
     codingHarness,
     qualityFlow,
+    consoleQueries,
+    archive,
     schemaInitializationError,
     testMode,
   };
@@ -293,6 +302,11 @@ export function createApp(options: {
     qualityFlow,
   });
   registerQualityRoutes(app, { testMode, qualityFlow });
+  registerConsoleRoutes(app, {
+    testMode,
+    queries: consoleQueries,
+    archive,
+  });
   return app;
 }
 

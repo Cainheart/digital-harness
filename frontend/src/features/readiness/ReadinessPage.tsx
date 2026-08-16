@@ -4,7 +4,11 @@ import type { ReadinessView } from "./readiness.types";
 import { ReadinessCard } from "./ReadinessCard";
 
 /** 展示后端 readiness 事实，并将未就绪状态转换为不可执行的界面状态。 */
-export function ReadinessPage() {
+export function ReadinessPage({
+  onNavigate,
+}: {
+  onNavigate?: (path: string) => void;
+} = {}) {
   // 运行准备页面只展示后端事实，并把 blocked/degraded 状态传递为不可执行。
   const [view, setView] = useState<ReadinessView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +86,11 @@ export function ReadinessPage() {
         <button type="button" disabled={loading} onClick={() => void refresh()}>
           {loading ? "检查中…" : "重新检查"}
         </button>
-        <button type="button" disabled={blocked}>
+        <button
+          type="button"
+          disabled={blocked}
+          onClick={() => onNavigate?.("/projects/new")}
+        >
           启动 Digital Harness
         </button>
       </div>

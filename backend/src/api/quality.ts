@@ -3,6 +3,7 @@ import { QualityFlowService } from "../application/quality-flow.js";
 import { EvidenceRepository } from "../infra/repositories/evidence.js";
 import { ProjectTaskRepository } from "../infra/repositories/project-task.js";
 import { QualityRepository } from "../infra/repositories/quality.js";
+import { InvalidArgumentError } from "../domain/errors.js";
 import { assertLocalRequest } from "../security/local-access.js";
 import { createRequestTraceId } from "./request-trace.js";
 import { requireRecord, requireSafeString } from "./request-validation.js";
@@ -43,8 +44,9 @@ export function registerQualityRoutes(
     const traceId = createRequestTraceId("quality-tasks");
     assertLocalRequest(request, options.testMode, traceId);
     const projectId = pathString(request, "projectId", traceId);
+    const query = parseTaskPageQuery(request, traceId);
     const page = app.runtime.database.transaction((connection) =>
-      projectTasks.listTasks(connection, projectId, null, 500),
+      projectTasks.listTasks(connection, projectId, query.cursor, query.limit),
     );
     return {
       ...page,
@@ -303,4 +305,35 @@ function pathString(
 ): string {
   const params = request.params as Record<string, unknown>;
   return requireSafeString(params[name], name, traceId);
+}
+
+/** 读取 Task 9 任务列表游标，兼容 Task 8 质量规格包装结果。 */
+function parseTaskPageQuery(
+  request: FastifyRequest,
+  traceId: string,
+): { cursor: string | null; limit: number } {
+  const search = new URL(request.raw.url ?? "/", "http://localhost")
+    .searchParams;
+  const allowed = new Set(["cursor", "limit"]);
+  const unknown = [
+    ...new Set([...search.keys()].filter((key) => !allowed.has(key))),
+  ];
+  if (unknown.length > 0) {
+    throw new InvalidArgumentError("存在未声明的任务查询参数", {
+      traceId,
+      data: { unknown },
+    });
+  }
+  const cursorValues = search.getAll("cursor");
+  if (cursorValues.length > 1)
+    throw new InvalidArgumentError("cursor 只能出现一次", { traceId });
+  const cursor = cursorValues[0]?.trim() || null;
+  const rawLimit = search.get("limit");
+  const limit = rawLimit === null ? 100 : Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new InvalidArgumentError("limit 必须介于 1 和 500 之间", {
+      traceId,
+    });
+  }
+  return { cursor, limit };
 }
