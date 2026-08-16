@@ -129,6 +129,61 @@ export const WORKFLOW_INDEX_DEFINITIONS = [
 export const WORKFLOW_REQUIRED_INDEX_NAMES = [
   "ux_workflow_leases_active_task",
 ] as const;
+/** Task 6 调研、来源、结论、指标和双 PM 评审事实表。 */
+export const RESEARCH_TABLE_ORDER = [
+  "research_grants",
+  "research_runs",
+  "research_sources",
+  "research_reports",
+  "research_conclusions",
+  "research_source_validations",
+  "research_conflicts",
+  "product_success_metrics",
+  "prd_versions",
+  "pm_peer_reviews",
+  "research_security_events",
+] as const;
+/** 用于启动完整性检查的 Task 6 表集合。 */
+export const RESEARCH_TABLES = new Set<string>(RESEARCH_TABLE_ORDER);
+/** Task 6 查询使用的固定复合索引。 */
+export const RESEARCH_INDEX_DEFINITIONS = [
+  ["research_grants", "ix_research_grants_project_task", "project_id,task_id"],
+  [
+    "research_runs",
+    "ix_research_runs_project_created",
+    "project_id,created_at",
+  ],
+  [
+    "research_sources",
+    "ix_research_sources_project_created",
+    "project_id,created_at",
+  ],
+  [
+    "research_conclusions",
+    "ix_research_conclusions_project_status",
+    "project_id,status",
+  ],
+  [
+    "product_success_metrics",
+    "ix_product_success_metrics_project_status",
+    "project_id,status",
+  ],
+  [
+    "prd_versions",
+    "ix_prd_versions_project_version",
+    "project_id,version_number",
+  ],
+  [
+    "pm_peer_reviews",
+    "ix_pm_peer_reviews_prd_created",
+    "prd_version_id,created_at",
+  ],
+  [
+    "research_security_events",
+    "ix_research_security_events_project_created",
+    "project_id,created_at",
+  ],
+] as const;
 /** 需要 project_id 索引和删除边界的业务表集合。 */
 export const PROJECT_SCOPED_TABLES = [
   "tasks",
@@ -149,9 +204,16 @@ export const PROJECT_SCOPED_TABLES = [
   "idempotency_records",
   "trace_links",
 ] as const;
+/** Task 6 表单独维护，避免基础 migration 在表创建前创建索引。 */
+export const RESEARCH_PROJECT_SCOPED_TABLES = RESEARCH_TABLE_ORDER;
+/** 全部项目范围表的 project_id 索引名来源。 */
+export const ALL_PROJECT_SCOPED_TABLES = [
+  ...PROJECT_SCOPED_TABLES,
+  ...RESEARCH_PROJECT_SCOPED_TABLES,
+] as const;
 /** 为项目范围表生成固定的 project_id 索引名，供 migration 和完整性检查共用。 */
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries(
-  [...PROJECT_SCOPED_TABLES, "project_deletion_audits"].map((name) => [
+  [...ALL_PROJECT_SCOPED_TABLES, "project_deletion_audits"].map((name) => [
     name,
     `ix_${name}_project_id`,
   ]),
@@ -202,31 +264,39 @@ export function renderImmutableTrigger(
 export function renderTraceLinkTrigger(
   name: string,
   action: "INSERT" | "UPDATE",
+  includeResearch = false,
 ): string {
-  const entityChecks = [
-    "WHEN NEW.source_type = 'project' AND NEW.source_id != NEW.project_id THEN RAISE(ABORT, 'trace_links source project mismatch')",
-    "WHEN NEW.target_type = 'project' AND NEW.target_id != NEW.project_id THEN RAISE(ABORT, 'trace_links target project mismatch')",
-    ...(
-      [
-        "task",
-        "artifact",
-        "artifact_version",
-        "approval",
-        "review",
-        "test_case",
-        "test_run",
-        "defect",
-        "execution_attempt",
-        "model_call",
-        "tool_call",
-        "notification",
-        "domain_event",
-      ] as const
-    ).flatMap((type) => [
-      renderTraceEndpointCheck(type, "source"),
-      renderTraceEndpointCheck(type, "target"),
-    ]),
-  ];
+  const baseTypes = [
+    "task",
+    "artifact",
+    "artifact_version",
+    "approval",
+    "review",
+    "test_case",
+    "test_run",
+    "defect",
+    "execution_attempt",
+    "model_call",
+    "tool_call",
+    "notification",
+    "domain_event",
+  ] as const;
+  const researchTypes = [
+    "research_grant",
+    "research_run",
+    "research_source",
+    "research_report",
+    "research_conclusion",
+    "research_source_validation",
+    "research_conflict",
+    "product_success_metric",
+    "prd_version",
+    "pm_peer_review",
+    "research_security_event",
+  ] as const;
+  const endpointTypes = includeResearch
+    ? [...baseTypes, ...researchTypes]
+    : [...baseTypes];
   const allowed = [
     "requirement",
     "acceptance_criterion",
@@ -245,13 +315,18 @@ export function renderTraceLinkTrigger(
     "notification",
     "domain_event",
     "evidence",
+    ...(includeResearch ? researchTypes : []),
   ]
     .map((value) => `'${value}'`)
     .join(",");
-  const sourceChecks = entityChecks.join(" ");
-  const targetChecks = entityChecks
-    .map((condition) => condition.replaceAll("source", "target"))
-    .join(" ");
+  const sourceChecks = [
+    "WHEN NEW.source_type = 'project' AND NEW.source_id != NEW.project_id THEN RAISE(ABORT, 'trace_links source project mismatch')",
+    ...endpointTypes.map((type) => renderTraceEndpointCheck(type, "source")),
+  ].join(" ");
+  const targetChecks = [
+    "WHEN NEW.target_type = 'project' AND NEW.target_id != NEW.project_id THEN RAISE(ABORT, 'trace_links target project mismatch')",
+    ...endpointTypes.map((type) => renderTraceEndpointCheck(type, "target")),
+  ].join(" ");
   return [
     `CREATE TRIGGER ${name}`,
     `BEFORE ${action} ON trace_links`,
@@ -274,25 +349,40 @@ function renderTraceEndpointCheck(
 }
 
 function typeTable(type: string): string {
-  return type === "artifact"
-    ? "artifacts"
-    : type === "artifact_version"
-      ? "artifact_versions"
-      : type === "test_case"
-        ? "test_cases"
-        : type === "test_run"
-          ? "test_runs"
-          : type === "execution_attempt"
-            ? "execution_attempts"
-            : type === "model_call"
-              ? "model_calls"
-              : type === "tool_call"
-                ? "tool_calls"
-                : type === "notification"
-                  ? "notifications"
-                  : type === "domain_event"
-                    ? "domain_events"
-                    : `${type}s`;
+  const researchTables: Record<string, string> = {
+    research_grant: "research_grants",
+    research_run: "research_runs",
+    research_source: "research_sources",
+    research_report: "research_reports",
+    research_conclusion: "research_conclusions",
+    research_source_validation: "research_source_validations",
+    research_conflict: "research_conflicts",
+    product_success_metric: "product_success_metrics",
+    prd_version: "prd_versions",
+    pm_peer_review: "pm_peer_reviews",
+    research_security_event: "research_security_events",
+  };
+  return researchTables[type]
+    ? researchTables[type]
+    : type === "artifact"
+      ? "artifacts"
+      : type === "artifact_version"
+        ? "artifact_versions"
+        : type === "test_case"
+          ? "test_cases"
+          : type === "test_run"
+            ? "test_runs"
+            : type === "execution_attempt"
+              ? "execution_attempts"
+              : type === "model_call"
+                ? "model_calls"
+                : type === "tool_call"
+                  ? "tool_calls"
+                  : type === "notification"
+                    ? "notifications"
+                    : type === "domain_event"
+                      ? "domain_events"
+                      : `${type}s`;
 }
 
 /**
@@ -700,6 +790,118 @@ export function migrateModelGatewaySchema(
   }
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0007_task5_model_gateway",
+  );
+}
+
+/**
+ * 创建 Task 6 的调研、来源治理、指标和 PM 评审持久化合同。
+ * 修改日期：2026-08-17。
+ * 修改原因：网页证据和 Boss 审批前置条件不能只存在内存或 Artifact 文本中，必须可恢复、可追踪且可删除。
+ */
+export function migrateResearchSchema(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS research_grants (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, role TEXT NOT NULL,
+      allowed_domains_json TEXT NOT NULL CHECK (json_valid(allowed_domains_json) = 1), allowed_urls_json TEXT NOT NULL CHECK (json_valid(allowed_urls_json) = 1),
+      max_pages INTEGER NOT NULL CHECK (max_pages BETWEEN 1 AND 100), timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
+      evidence_policy TEXT NOT NULL CHECK (evidence_policy = 'source_metadata_and_quote'), network TEXT NOT NULL CHECK (network = 'public_web_only'),
+      expires_at TEXT NOT NULL, trace_id TEXT NOT NULL, pages_used INTEGER NOT NULL DEFAULT 0 CHECK (pages_used >= 0),
+      status TEXT NOT NULL CHECK (status IN ('active','exhausted','expired')), created_at TEXT NOT NULL, UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_runs (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, grant_id TEXT NOT NULL REFERENCES research_grants(id),
+      query TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('running','completed','blocked','failed')),
+      trace_id TEXT NOT NULL, error_code TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_sources (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, run_id TEXT, title TEXT NOT NULL, url TEXT NOT NULL,
+      publisher TEXT, published_at TEXT, visited_at TEXT NOT NULL, source_type TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('accessed','failed','blocked','pending')), http_status INTEGER, accessible INTEGER NOT NULL CHECK (accessible IN (0,1)),
+      supports_conclusions_json TEXT NOT NULL CHECK (json_valid(supports_conclusions_json) = 1), quote TEXT NOT NULL, summary TEXT NOT NULL,
+      content_hash TEXT, snapshot_artifact_ref TEXT, verified_by TEXT, verified_at TEXT,
+      verification_result TEXT NOT NULL CHECK (verification_result IN ('unverified','supported','unsupported','conflicted')),
+      independent INTEGER, conflict_evidence_json TEXT NOT NULL CHECK (json_valid(conflict_evidence_json) = 1), trace_id TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,run_id) REFERENCES research_runs(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_reports (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, run_id TEXT NOT NULL, artifact_ref TEXT NOT NULL,
+      summary TEXT NOT NULL, source_ids_json TEXT NOT NULL CHECK (json_valid(source_ids_json) = 1), conclusion_ids_json TEXT NOT NULL CHECK (json_valid(conclusion_ids_json) = 1),
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id),
+      FOREIGN KEY(project_id,run_id) REFERENCES research_runs(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_conclusions (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, run_id TEXT, conclusion_type TEXT NOT NULL,
+      statement TEXT NOT NULL, source_ids_json TEXT NOT NULL CHECK (json_valid(source_ids_json) = 1), independence_declaration INTEGER NOT NULL CHECK (independence_declaration IN (0,1)),
+      status TEXT NOT NULL CHECK (status IN ('pending','accepted_for_prd','hypothesis_only','rejected')), required_sources INTEGER NOT NULL CHECK (required_sources >= 1),
+      valid_independent_sources INTEGER NOT NULL CHECK (valid_independent_sources >= 0), conflicts_json TEXT NOT NULL CHECK (json_valid(conflicts_json) = 1),
+      assumption_label TEXT, reviewer TEXT, evidence_refs_json TEXT NOT NULL CHECK (json_valid(evidence_refs_json) = 1), created_at TEXT NOT NULL, validated_at TEXT,
+      UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,run_id) REFERENCES research_runs(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_source_validations (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), conclusion_id TEXT NOT NULL, source_id TEXT NOT NULL, reviewer_role TEXT NOT NULL,
+      reviewer_id TEXT NOT NULL, accessible INTEGER NOT NULL CHECK (accessible IN (0,1)), supports_statement INTEGER NOT NULL CHECK (supports_statement IN (0,1)),
+      independent INTEGER NOT NULL CHECK (independent IN (0,1)), result TEXT NOT NULL CHECK (result IN ('supported','unsupported','conflicted')), rationale TEXT NOT NULL,
+      conflict_ids_json TEXT NOT NULL CHECK (json_valid(conflict_ids_json) = 1), trace_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,conclusion_id) REFERENCES research_conclusions(project_id,id), FOREIGN KEY(project_id,source_id) REFERENCES research_sources(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_conflicts (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), conclusion_id TEXT NOT NULL, source_a_id TEXT NOT NULL, source_b_id TEXT NOT NULL,
+      statement TEXT NOT NULL, evidence_a TEXT NOT NULL, evidence_b TEXT NOT NULL, judgment_reason TEXT, status TEXT NOT NULL CHECK (status IN ('unresolved','resolved')),
+      created_at TEXT NOT NULL, UNIQUE(project_id,id), FOREIGN KEY(project_id,conclusion_id) REFERENCES research_conclusions(project_id,id),
+      FOREIGN KEY(project_id,source_a_id) REFERENCES research_sources(project_id,id), FOREIGN KEY(project_id,source_b_id) REFERENCES research_sources(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS product_success_metrics (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, name TEXT NOT NULL, target_value TEXT NOT NULL,
+      measurement_definition TEXT NOT NULL, verification_method TEXT NOT NULL, owner_role TEXT NOT NULL, reviewer_role TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft','pending_review','reviewed','rejected')), evidence_refs_json TEXT NOT NULL CHECK (json_valid(evidence_refs_json) = 1),
+      review_id TEXT, created_at TEXT NOT NULL, reviewed_at TEXT, UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS prd_versions (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, version_number INTEGER NOT NULL CHECK (version_number >= 1),
+      content_artifact_ref TEXT NOT NULL, source_ids_json TEXT NOT NULL CHECK (json_valid(source_ids_json) = 1), conclusion_ids_json TEXT NOT NULL CHECK (json_valid(conclusion_ids_json) = 1),
+      metric_ids_json TEXT NOT NULL CHECK (json_valid(metric_ids_json) = 1), peer_review_ids_json TEXT NOT NULL CHECK (json_valid(peer_review_ids_json) = 1),
+      dispute_refs_json TEXT NOT NULL CHECK (json_valid(dispute_refs_json) = 1), status TEXT NOT NULL CHECK (status IN ('draft','ready_for_approval','approved','rejected')),
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(project_id,id), UNIQUE(project_id,version_number), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS pm_peer_reviews (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, prd_version_id TEXT NOT NULL, reviewer_role TEXT NOT NULL,
+      reviewer_id TEXT NOT NULL, decision TEXT NOT NULL CHECK (decision IN ('approved','rejected')), source_validation_summary TEXT NOT NULL,
+      conflict_ids_json TEXT NOT NULL CHECK (json_valid(conflict_ids_json) = 1), comments TEXT NOT NULL, trace_id TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,prd_version_id) REFERENCES prd_versions(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS research_security_events (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, run_id TEXT, source_id TEXT, categories_json TEXT NOT NULL CHECK (json_valid(categories_json) = 1),
+      result TEXT NOT NULL CHECK (result IN ('continued_with_untrusted_text','skipped','blocked')), redaction_reason TEXT NOT NULL, trace_id TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(project_id,id), FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id), FOREIGN KEY(project_id,run_id) REFERENCES research_runs(project_id,id), FOREIGN KEY(project_id,source_id) REFERENCES research_sources(project_id,id)
+    );
+  `);
+  for (const table of RESEARCH_PROJECT_SCOPED_TABLES)
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS ${PROJECT_ID_INDEX_NAMES[table]} ON ${table}(project_id)`,
+    );
+  for (const [table, index, columns] of RESEARCH_INDEX_DEFINITIONS)
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  db.exec(
+    "DROP TRIGGER IF EXISTS trg_trace_links_project_scope_insert; DROP TRIGGER IF EXISTS trg_trace_links_project_scope_update;",
+  );
+  db.exec(
+    renderTraceLinkTrigger(
+      "trg_trace_links_project_scope_insert",
+      "INSERT",
+      true,
+    ),
+  );
+  db.exec(
+    renderTraceLinkTrigger(
+      "trg_trace_links_project_scope_update",
+      "UPDATE",
+      true,
+    ),
+  );
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0008_task6_research",
   );
 }
 

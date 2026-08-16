@@ -377,6 +377,17 @@ const TRACE_NODE_TYPES = new Set([
   "tool_call",
   "notification",
   "domain_event",
+  "research_grant",
+  "research_run",
+  "research_source",
+  "research_report",
+  "research_conclusion",
+  "research_source_validation",
+  "research_conflict",
+  "product_success_metric",
+  "prd_version",
+  "pm_peer_review",
+  "research_security_event",
 ]);
 /** 保存跨对象双向追踪关系及其项目和 trace 范围。 */
 export type TraceLink = {

@@ -18,13 +18,17 @@ import {
   requireSafeString,
   requireString,
 } from "./request-validation.js";
+import type { ResearchWorkflow } from "../application/research-workflow.js";
 
 /** 注册 Task 4 项目控制、固定工作流、审批、通知和任务租约接口。 */
 export function registerWorkflowRoutes(
   app: FastifyInstance,
-  options: { testMode: boolean },
+  options: { testMode: boolean; researchWorkflow?: ResearchWorkflow },
 ): void {
-  const coordinator = new WorkflowCoordinator(app.runtime.database);
+  const coordinator = new WorkflowCoordinator(
+    app.runtime.database,
+    options.researchWorkflow,
+  );
   const scheduler = new TaskScheduler();
 
   app.post("/api/v1/projects", async (request, reply) => {

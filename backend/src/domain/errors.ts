@@ -216,3 +216,18 @@ export class ModelConfigurationBlockedError extends DomainError {
     });
   }
 }
+
+/** 使用固定错误码表示浏览器或其他公开互联网依赖不可用。 */
+export class ExternalDependencyUnavailableError extends DomainError {
+  constructor(
+    message = "外部调研依赖不可用，任务保持阻塞",
+    options?: DomainErrorOptions,
+  ) {
+    super(message, options, {
+      code: "EXTERNAL_DEPENDENCY_UNAVAILABLE",
+      statusCode: 503,
+      impact: "当前调研任务未完成，已保存的来源和事件保留",
+      nextAction: "检查 Chromium、网络和来源 URL 白名单后重试",
+    });
+  }
+}

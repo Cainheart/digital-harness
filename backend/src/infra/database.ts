@@ -27,6 +27,7 @@ import {
   migrateRuntimeSchema,
   migrateWorkflowHardeningSchema,
   migrateModelGatewaySchema,
+  migrateResearchSchema,
   ORGANIZATION_INDEX_DEFINITIONS,
   WORKFLOW_INDEX_DEFINITIONS,
   WORKFLOW_REQUIRED_INDEX_NAMES,
@@ -34,6 +35,7 @@ import {
   WORKFLOW_TABLES,
   MODEL_GATEWAY_TABLES,
   MODEL_GATEWAY_INDEX_DEFINITIONS,
+  RESEARCH_TABLES,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
@@ -183,6 +185,7 @@ export class Database {
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -209,6 +212,7 @@ export class Database {
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -234,6 +238,7 @@ export class Database {
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -258,6 +263,7 @@ export class Database {
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -281,6 +287,7 @@ export class Database {
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0005_task4_workflow") {
         const callback =
           backupCallback ??
@@ -303,6 +310,7 @@ export class Database {
           );
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
       } else if (current === "0006_task4_workflow_hardening") {
         const callback =
           backupCallback ??
@@ -324,12 +332,34 @@ export class Database {
             "修复迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateModelGatewaySchema(this.connection);
+        migrateResearchSchema(this.connection);
+      } else if (current === "0007_task5_model_gateway") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateResearchSchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0007_task5_model_gateway",
+          "备份持久化根目录并沿批准路径升级到 0008_task6_research",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -574,6 +604,17 @@ export class Database {
     const now = new Date().toISOString();
     this.controlledProjectPurge(projectId, (db) => {
       for (const table of [
+        "research_security_events",
+        "pm_peer_reviews",
+        "prd_versions",
+        "product_success_metrics",
+        "research_conflicts",
+        "research_source_validations",
+        "research_conclusions",
+        "research_reports",
+        "research_sources",
+        "research_runs",
+        "research_grants",
         "structured_messages",
         "policy_decisions",
         "idempotency_records",
@@ -643,6 +684,7 @@ export class Database {
       ...ORGANIZATION_TABLES,
       ...WORKFLOW_TABLES,
       ...MODEL_GATEWAY_TABLES,
+      ...RESEARCH_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -829,6 +871,180 @@ export class Database {
         "expires_at",
         "confirmed_at",
         "version",
+      ],
+      research_grants: [
+        "id",
+        "project_id",
+        "task_id",
+        "role",
+        "allowed_domains_json",
+        "allowed_urls_json",
+        "max_pages",
+        "timeout_seconds",
+        "evidence_policy",
+        "network",
+        "expires_at",
+        "trace_id",
+        "pages_used",
+        "status",
+        "created_at",
+      ],
+      research_runs: [
+        "id",
+        "project_id",
+        "task_id",
+        "grant_id",
+        "query",
+        "role",
+        "status",
+        "trace_id",
+        "error_code",
+        "created_at",
+        "completed_at",
+      ],
+      research_sources: [
+        "id",
+        "project_id",
+        "task_id",
+        "run_id",
+        "title",
+        "url",
+        "publisher",
+        "published_at",
+        "visited_at",
+        "source_type",
+        "status",
+        "http_status",
+        "accessible",
+        "supports_conclusions_json",
+        "quote",
+        "summary",
+        "content_hash",
+        "snapshot_artifact_ref",
+        "verified_by",
+        "verified_at",
+        "verification_result",
+        "independent",
+        "conflict_evidence_json",
+        "trace_id",
+        "created_at",
+      ],
+      research_reports: [
+        "id",
+        "project_id",
+        "task_id",
+        "run_id",
+        "artifact_ref",
+        "summary",
+        "source_ids_json",
+        "conclusion_ids_json",
+        "created_by",
+        "created_at",
+      ],
+      research_conclusions: [
+        "id",
+        "project_id",
+        "task_id",
+        "run_id",
+        "conclusion_type",
+        "statement",
+        "source_ids_json",
+        "independence_declaration",
+        "status",
+        "required_sources",
+        "valid_independent_sources",
+        "conflicts_json",
+        "assumption_label",
+        "reviewer",
+        "evidence_refs_json",
+        "created_at",
+        "validated_at",
+      ],
+      research_source_validations: [
+        "id",
+        "project_id",
+        "conclusion_id",
+        "source_id",
+        "reviewer_role",
+        "reviewer_id",
+        "accessible",
+        "supports_statement",
+        "independent",
+        "result",
+        "rationale",
+        "conflict_ids_json",
+        "trace_id",
+        "created_at",
+      ],
+      research_conflicts: [
+        "id",
+        "project_id",
+        "conclusion_id",
+        "source_a_id",
+        "source_b_id",
+        "statement",
+        "evidence_a",
+        "evidence_b",
+        "judgment_reason",
+        "status",
+        "created_at",
+      ],
+      product_success_metrics: [
+        "id",
+        "project_id",
+        "task_id",
+        "name",
+        "target_value",
+        "measurement_definition",
+        "verification_method",
+        "owner_role",
+        "reviewer_role",
+        "status",
+        "evidence_refs_json",
+        "review_id",
+        "created_at",
+        "reviewed_at",
+      ],
+      prd_versions: [
+        "id",
+        "project_id",
+        "task_id",
+        "version_number",
+        "content_artifact_ref",
+        "source_ids_json",
+        "conclusion_ids_json",
+        "metric_ids_json",
+        "peer_review_ids_json",
+        "dispute_refs_json",
+        "status",
+        "created_by",
+        "created_at",
+      ],
+      pm_peer_reviews: [
+        "id",
+        "project_id",
+        "task_id",
+        "prd_version_id",
+        "reviewer_role",
+        "reviewer_id",
+        "decision",
+        "source_validation_summary",
+        "conflict_ids_json",
+        "comments",
+        "trace_id",
+        "created_at",
+      ],
+      research_security_events: [
+        "id",
+        "project_id",
+        "task_id",
+        "run_id",
+        "source_id",
+        "categories_json",
+        "result",
+        "redaction_reason",
+        "trace_id",
+        "created_at",
       ],
     };
     for (const [table, columns] of Object.entries(requiredColumns))

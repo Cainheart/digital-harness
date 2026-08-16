@@ -46,6 +46,7 @@ import { SqliteEventStore } from "../infra/repositories/events.js";
 import { EvidenceRepository } from "../infra/repositories/evidence.js";
 import { ProjectTaskRepository } from "../infra/repositories/project-task.js";
 import { SqliteIdempotencyRepository } from "../infra/repositories/idempotency.js";
+import type { ResearchWorkflow } from "./research-workflow.js";
 
 /** 触发固定流程自动推进的受限事件集合。 */
 export type WorkflowTrigger =
@@ -92,7 +93,10 @@ export class WorkflowCoordinator {
   private readonly idempotency = new SqliteIdempotencyRepository();
 
   /** 注入业务数据库；所有状态和事件写入由同一事务完成。 */
-  constructor(private readonly database: Database) {}
+  constructor(
+    private readonly database: Database,
+    private readonly researchWorkflow?: ResearchWorkflow,
+  ) {}
 
   /** 创建准备中的项目，并拒绝同时存在第二个活动项目。 */
   createProject(input: Record<string, unknown>): Project {
@@ -1135,6 +1139,12 @@ export class WorkflowCoordinator {
             },
           );
       }
+      if (
+        current.approvalType === ApprovalType.PRD &&
+        decision === "approved"
+      ) {
+        this.assertResearchPrdReady(connection, current.projectId);
+      }
       const now = utcNow();
       connection
         .prepare(
@@ -1384,11 +1394,13 @@ export class WorkflowCoordinator {
         trigger,
         expectedTrigger: expected[project.stage],
       });
-    if (project.stage === WorkflowStage.PM_CROSS_REVIEW)
+    if (project.stage === WorkflowStage.PM_CROSS_REVIEW) {
+      this.assertResearchPrdReady(connection, project.id);
       return {
         stage: WorkflowStage.PRD_APPROVAL,
         approval: this.newApproval(project, ApprovalType.PRD),
       };
+    }
     if (project.stage === WorkflowStage.FEASIBILITY) {
       const dispute = connection
         .prepare(
@@ -1431,6 +1443,34 @@ export class WorkflowCoordinator {
       stage: nextStageOrThrow(project.stage) as WorkflowStage,
       approval: null,
     };
+  }
+
+  /** Task 6 的证据门禁：只有完成来源、结论、指标和 PM 评审的 PRD 才能进入 Boss。 */
+  private assertResearchPrdReady(
+    connection: BetterSqlite3.Database,
+    projectId: string,
+  ): void {
+    const task6Started = connection
+      .prepare(
+        "SELECT 1 FROM research_grants WHERE project_id=? UNION SELECT 1 FROM research_sources WHERE project_id=? UNION SELECT 1 FROM research_conclusions WHERE project_id=? UNION SELECT 1 FROM product_success_metrics WHERE project_id=? UNION SELECT 1 FROM prd_versions WHERE project_id=? LIMIT 1",
+      )
+      .get(projectId, projectId, projectId, projectId, projectId);
+    // 兼容 Task 4 的历史流程样例；一旦项目使用 Task 6 对象，审批必须走完整证据门禁。
+    if (!task6Started) return;
+    if (this.researchWorkflow) {
+      this.researchWorkflow.assertPrdReadyForApproval(connection, projectId);
+      return;
+    }
+    const row = connection
+      .prepare(
+        "SELECT id FROM prd_versions WHERE project_id=? AND status='ready_for_approval' ORDER BY version_number DESC LIMIT 1",
+      )
+      .get(projectId) as { id: string } | undefined;
+    if (!row)
+      throw new EvidenceIncompleteError(
+        "PRD 缺少已核验来源、项目成功指标或 PM 交叉评审，不能进入 Boss 审批",
+        { data: { projectId } },
+      );
   }
 
   private newApproval(project: Project, approvalType: ApprovalType): Approval {

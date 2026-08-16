@@ -52,6 +52,14 @@ import {
   ModelGateway,
 } from "./gateway/model/gateway.js";
 import { SqliteModelCallRecorder } from "./observability/model-call-recorder.js";
+import { registerResearchRoutes } from "./api/research.js";
+import { ResearchWorkflow } from "./application/research-workflow.js";
+import { ResearchAdapter } from "./research/adapter.js";
+import {
+  PlaywrightResearchBrowser,
+  UnavailableResearchBrowser,
+  type ResearchBrowser,
+} from "./research/browser.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -73,6 +81,7 @@ export type RuntimeState = {
   modelCallRecorder: SqliteModelCallRecorder;
   modelGateway: ModelGateway;
   modelSettings: ModelSettingsService;
+  researchWorkflow: ResearchWorkflow;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -82,6 +91,7 @@ export function createApp(options: {
   persistentRoot: string;
   testMode?: boolean;
   initializeRuntime?: boolean;
+  researchBrowser?: ResearchBrowser;
 }): FastifyInstance {
   const testMode = options.testMode ?? false;
   const initializeRuntime = options.initializeRuntime ?? true;
@@ -147,6 +157,18 @@ export function createApp(options: {
     settings.artifactPath,
     settings.artifactMaxSizeBytes,
   );
+  const researchBrowser =
+    options.researchBrowser ??
+    (testMode
+      ? new UnavailableResearchBrowser()
+      : new PlaywrightResearchBrowser({
+          executablePath: findBrowserExecutable(),
+        }));
+  const researchWorkflow = new ResearchWorkflow(
+    database,
+    artifactStore,
+    new ResearchAdapter(database, researchBrowser),
+  );
   const runtime: RuntimeState = {
     settings,
     database,
@@ -162,6 +184,7 @@ export function createApp(options: {
     modelCallRecorder,
     modelGateway,
     modelSettings,
+    researchWorkflow,
     schemaInitializationError,
     testMode,
   };
@@ -235,9 +258,10 @@ export function createApp(options: {
   registerOrganizationRoutes(app, { testMode });
   registerMessageRoutes(app, { testMode });
   registerPolicyRoutes(app, { testMode });
-  registerWorkflowRoutes(app, { testMode });
+  registerWorkflowRoutes(app, { testMode, researchWorkflow });
   registerModelSettingsRoutes(app, { testMode });
   registerExecutionRoutes(app, { testMode });
+  registerResearchRoutes(app, { testMode });
   return app;
 }
 
