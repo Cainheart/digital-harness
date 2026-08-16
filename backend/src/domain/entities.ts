@@ -227,6 +227,8 @@ export type TestCase = {
   expectedResult: string;
   testType: string;
   ownerRole: string;
+  /** Task 8 测试策略引用；Task 2 历史用例可以没有该字段。 */
+  strategyId?: string | null;
   createdAt: string;
   version: number;
 };
@@ -246,6 +248,12 @@ export type TestRun = {
   status: string;
   evidenceVersionId: string | null;
   traceId: string;
+  /** Task 8 只允许 Review 通过的质量基线进入测试执行。 */
+  baselineReviewId?: string | null;
+  /** 真实 stdout/stderr/日志或截图 Artifact 引用。 */
+  evidenceRefs?: string[];
+  /** 记录产生真实测试结果的测试角色。 */
+  executedByRole?: string | null;
 };
 /** 保存缺陷、NPI 负责人、修复版本和回归结果。 */
 export type Defect = {

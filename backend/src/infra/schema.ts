@@ -160,6 +160,19 @@ export const CODING_TABLE_ORDER = [
 ] as const;
 /** 用于启动完整性检查的 Task 7 表集合。 */
 export const CODING_TABLES = new Set<string>(CODING_TABLE_ORDER);
+/** Task 8 质量闭环的任务规格、Review、测试策略、NPI 和回归事实表。 */
+export const QUALITY_TABLE_ORDER = [
+  "task_quality_specs",
+  "test_strategies",
+  "quality_reviews",
+  "npi_analyses",
+  "defect_fix_requests",
+  "regression_requests",
+  "regression_results",
+  "quality_idempotency",
+] as const;
+/** 用于启动完整性检查的 Task 8 表集合。 */
+export const QUALITY_TABLES = new Set<string>(QUALITY_TABLE_ORDER);
 /** Task 7 按 Attempt、会话和项目查询证据的固定索引。 */
 export const CODING_INDEX_DEFINITIONS = [
   [
@@ -185,6 +198,20 @@ export const CODING_INDEX_DEFINITIONS = [
     "session_id,created_at",
   ],
   ["coding_handoffs", "ix_coding_handoffs_session", "session_id"],
+] as const;
+/** Task 8 按项目、任务、策略、缺陷和幂等键查询的固定索引。 */
+export const QUALITY_INDEX_DEFINITIONS = [
+  ["task_quality_specs", "ix_task_quality_specs_project_task", "project_id,task_id"],
+  ["test_strategies", "ix_test_strategies_project_created", "project_id,created_at"],
+  ["quality_reviews", "ix_quality_reviews_project_task", "project_id,task_id"],
+  ["npi_analyses", "ix_npi_analyses_defect_created", "defect_id,created_at"],
+  ["defect_fix_requests", "ix_defect_fix_requests_defect_created", "defect_id,created_at"],
+  ["regression_requests", "ix_regression_requests_defect_status", "defect_id,status"],
+  ["regression_results", "ix_regression_results_defect_created", "defect_id,created_at"],
+] as const;
+/** Task 8 复合外键依赖的唯一父键索引；旧 defects 表只有单列主键，需补齐项目隔离父键。 */
+export const QUALITY_REQUIRED_INDEX_DEFINITIONS = [
+  ["defects", "ux_defects_project_id_id", "project_id,id"],
 ] as const;
 /** Task 6 查询使用的固定复合索引。 */
 export const RESEARCH_INDEX_DEFINITIONS = [
@@ -252,6 +279,7 @@ export const ALL_PROJECT_SCOPED_TABLES = [
   ...PROJECT_SCOPED_TABLES,
   ...RESEARCH_PROJECT_SCOPED_TABLES,
   ...CODING_TABLE_ORDER,
+  ...QUALITY_TABLE_ORDER.filter((table) => table !== "quality_idempotency"),
 ] as const;
 /** 为项目范围表生成固定的 project_id 索引名，供 migration 和完整性检查共用。 */
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries(
@@ -307,6 +335,7 @@ export function renderTraceLinkTrigger(
   name: string,
   action: "INSERT" | "UPDATE",
   includeResearch = false,
+  includeQuality = false,
 ): string {
   const baseTypes = [
     "task",
@@ -336,9 +365,18 @@ export function renderTraceLinkTrigger(
     "pm_peer_review",
     "research_security_event",
   ] as const;
-  const endpointTypes = includeResearch
-    ? [...baseTypes, ...researchTypes]
-    : [...baseTypes];
+  const qualityTypes = [
+    "quality_review",
+    "npi_analysis",
+    "fix_request",
+    "regression_request",
+    "regression_result",
+  ] as const;
+  const endpointTypes = [
+    ...baseTypes,
+    ...(includeResearch ? researchTypes : []),
+    ...(includeQuality ? qualityTypes : []),
+  ];
   const allowed = [
     "requirement",
     "acceptance_criterion",
@@ -358,6 +396,7 @@ export function renderTraceLinkTrigger(
     "domain_event",
     "evidence",
     ...(includeResearch ? researchTypes : []),
+    ...(includeQuality ? qualityTypes : []),
   ]
     .map((value) => `'${value}'`)
     .join(",");
@@ -404,6 +443,14 @@ function typeTable(type: string): string {
     pm_peer_review: "pm_peer_reviews",
     research_security_event: "research_security_events",
   };
+  const qualityTables: Record<string, string> = {
+    quality_review: "quality_reviews",
+    npi_analysis: "npi_analyses",
+    fix_request: "defect_fix_requests",
+    regression_request: "regression_requests",
+    regression_result: "regression_results",
+  };
+  if (qualityTables[type]) return qualityTables[type];
   return researchTables[type]
     ? researchTables[type]
     : type === "artifact"
@@ -1071,6 +1118,217 @@ export function migrateCodingSchema(db: BetterSqlite3.Database): void {
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0009_task7_coding",
   );
+}
+
+/** 创建 Task 8 质量闭环事实；历史 Review、失败、修复和回归记录只追加不覆盖。 */
+export function migrateQualityFlowSchema(db: BetterSqlite3.Database): void {
+  for (const [table, index, columns] of QUALITY_REQUIRED_INDEX_DEFINITIONS) {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_quality_specs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT NOT NULL,
+      task_version INTEGER NOT NULL CHECK (task_version >= 1),
+      goal TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL CHECK (json_valid(acceptance_criteria_json) = 1),
+      expected_artifact_types_json TEXT NOT NULL CHECK (json_valid(expected_artifact_types_json) = 1),
+      workspace_policy TEXT NOT NULL,
+      verification_profile TEXT NOT NULL,
+      stack_profile TEXT NOT NULL,
+      baseline_commit TEXT NOT NULL,
+      allowed_paths_json TEXT NOT NULL CHECK (json_valid(allowed_paths_json) = 1),
+      forbidden_paths_json TEXT NOT NULL CHECK (json_valid(forbidden_paths_json) = 1),
+      conversion_note TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(project_id,id),
+      UNIQUE(project_id,task_id,task_version),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS test_strategies (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      title TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      acceptance_criteria_json TEXT NOT NULL CHECK (json_valid(acceptance_criteria_json) = 1),
+      test_types_json TEXT NOT NULL CHECK (json_valid(test_types_json) = 1),
+      environment_json TEXT NOT NULL CHECK (json_valid(environment_json) = 1),
+      owner_role TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('draft','ready')),
+      created_at TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      UNIQUE(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS quality_reviews (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT NOT NULL,
+      session_id TEXT,
+      handoff_id TEXT,
+      artifact_version_id TEXT,
+      decision TEXT NOT NULL CHECK (decision IN ('approved','changes_requested','blocked')),
+      comments TEXT NOT NULL,
+      reviewer_role TEXT NOT NULL,
+      reviewer_id TEXT NOT NULL,
+      evidence_version INTEGER,
+      task_version INTEGER NOT NULL CHECK (task_version >= 1),
+      rework_task_id TEXT,
+      created_at TEXT NOT NULL,
+      decided_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id),
+      FOREIGN KEY(project_id,artifact_version_id) REFERENCES artifact_versions(project_id,id),
+      FOREIGN KEY(project_id,rework_task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS npi_analyses (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      defect_id TEXT NOT NULL,
+      reproduction TEXT NOT NULL,
+      root_cause TEXT NOT NULL,
+      impact TEXT NOT NULL,
+      recommended_fix TEXT NOT NULL,
+      owner_role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,defect_id) REFERENCES defects(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS defect_fix_requests (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      defect_id TEXT NOT NULL,
+      fix_description TEXT NOT NULL,
+      fixed_version_id TEXT,
+      fix_artifact_ref TEXT,
+      submitted_by TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('submitted','awaiting_regression')),
+      created_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,defect_id) REFERENCES defects(project_id,id),
+      FOREIGN KEY(project_id,fixed_version_id) REFERENCES artifact_versions(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS regression_requests (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      defect_id TEXT NOT NULL,
+      fix_request_id TEXT NOT NULL,
+      test_case_id TEXT,
+      scope TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending','running','passed','failed','blocked')),
+      created_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,defect_id) REFERENCES defects(project_id,id),
+      FOREIGN KEY(project_id,fix_request_id) REFERENCES defect_fix_requests(project_id,id),
+      FOREIGN KEY(project_id,test_case_id) REFERENCES test_cases(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS regression_results (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      defect_id TEXT NOT NULL,
+      regression_request_id TEXT NOT NULL,
+      test_run_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('passed','failed','blocked')),
+      evidence_refs_json TEXT NOT NULL CHECK (json_valid(evidence_refs_json) = 1),
+      actual_result TEXT NOT NULL,
+      executed_by_role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,defect_id) REFERENCES defects(project_id,id),
+      FOREIGN KEY(project_id,regression_request_id) REFERENCES regression_requests(project_id,id),
+      FOREIGN KEY(project_id,test_run_id) REFERENCES test_runs(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS quality_idempotency (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      operation TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      response_json TEXT NOT NULL CHECK (json_valid(response_json) = 1),
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  addColumnIfMissing(
+    db,
+    "test_cases",
+    "strategy_id",
+    "TEXT REFERENCES test_strategies(id)",
+  );
+  addColumnIfMissing(db, "test_runs", "baseline_review_id", "TEXT");
+  addColumnIfMissing(
+    db,
+    "test_runs",
+    "evidence_refs_json",
+    "TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(evidence_refs_json) = 1)",
+  );
+  addColumnIfMissing(db, "test_runs", "executed_by_role", "TEXT");
+
+  for (const [table, index, columns] of QUALITY_INDEX_DEFINITIONS) {
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  }
+  for (const table of QUALITY_TABLE_ORDER) {
+    if (table === "quality_idempotency") continue;
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS ix_${table}_project_id ON ${table} (project_id)`,
+    );
+  }
+  migrateQualityTraceLinkTriggers(db);
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0010_task8_quality_flow",
+  );
+}
+
+/** 重建 TraceLink trigger，使 Task 8 的 Review、NPI、修复和回归对象纳入项目隔离校验。 */
+export function migrateQualityTraceLinkTriggers(
+  db: BetterSqlite3.Database,
+): void {
+  db.exec(
+    "DROP TRIGGER IF EXISTS trg_trace_links_project_scope_insert; DROP TRIGGER IF EXISTS trg_trace_links_project_scope_update;",
+  );
+  db.exec(
+    renderTraceLinkTrigger(
+      "trg_trace_links_project_scope_insert",
+      "INSERT",
+      true,
+      true,
+    ),
+  );
+  db.exec(
+    renderTraceLinkTrigger(
+      "trg_trace_links_project_scope_update",
+      "UPDATE",
+      true,
+      true,
+    ),
+  );
+}
+
+/** 为已存在的 Task 2 表补充可选 Task 8 字段，避免重复迁移破坏历史数据。 */
+function addColumnIfMissing(
+  db: BetterSqlite3.Database,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as { name: string }[];
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 /** 将版本化初始化组织写入数据库；INSERT OR IGNORE 保留用户后续调整的岗位版本。 */

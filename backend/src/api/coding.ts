@@ -4,11 +4,16 @@ import { assertLocalRequest } from "../security/local-access.js";
 import { createRequestTraceId } from "./request-trace.js";
 import { requireRecord, requireSafeString } from "./request-validation.js";
 import { NativeCodingHarness } from "../coding/native-harness.js";
+import type { QualityFlowService } from "../application/quality-flow.js";
 
 /** 注册编码会话、动作、暂停恢复、验证和人工 Review API。 */
 export function registerCodingRoutes(
   app: FastifyInstance,
-  options: { testMode: boolean; harness: NativeCodingHarness },
+  options: {
+    testMode: boolean;
+    harness: NativeCodingHarness;
+    qualityFlow?: QualityFlowService;
+  },
 ): void {
   app.post("/api/v1/coding-sessions", async (request, reply) => {
     const traceId = createRequestTraceId("coding-start");
@@ -156,17 +161,64 @@ export function registerCodingRoutes(
     const decision = requireSafeString(body.decision, "decision", traceId);
     if (!["approved", "changes_requested", "blocked"].includes(decision))
       throw new InvalidArgumentError("Review decision 无效", { traceId });
-    const comments = typeof body.comments === "string" ? body.comments : "";
+    const comments =
+      typeof body.comments === "string"
+        ? body.comments
+        : typeof body.opinion === "string"
+          ? body.opinion
+          : "";
     const handoff = options.harness.result(sessionId).handoff;
     if (!handoff || handoff.handoffId !== handoffId)
       throw new InvalidArgumentError("handoffId 与 sessionId 不匹配", {
         traceId,
       });
-    return options.harness.reviewHandoff(
+    const idempotencyKey =
+      typeof body.idempotencyKey === "string" && body.idempotencyKey.trim()
+        ? body.idempotencyKey
+        : `${traceId}:review`;
+    const evidenceVersion =
+      body.evidenceVersion === undefined
+        ? undefined
+        : Number(body.evidenceVersion);
+    if (
+      evidenceVersion !== undefined &&
+      (!Number.isInteger(evidenceVersion) || evidenceVersion < 1)
+    )
+      throw new InvalidArgumentError("evidenceVersion 必须是正整数", {
+        traceId,
+      });
+    options.qualityFlow?.assertHandoffReadyForReview(
       sessionId,
       reviewerRole,
       decision as "approved" | "changes_requested" | "blocked",
       comments,
     );
+    const replay = options.qualityFlow?.getHandoffReviewReplay(idempotencyKey);
+    const current = options.harness.result(sessionId);
+    if (replay && current.session.status !== "REVIEW_REQUESTED")
+      return { ...current.session, qualityReview: replay };
+    const session = await options.harness.reviewHandoff(
+      sessionId,
+      reviewerRole,
+      decision as "approved" | "changes_requested" | "blocked",
+      comments,
+    );
+    if (!options.qualityFlow) return session;
+    const qualityReview = options.qualityFlow.recordHandoffReview(
+      sessionId,
+      reviewerRole,
+      decision as "approved" | "changes_requested" | "blocked",
+      comments,
+      {
+        reviewerId:
+          typeof body.reviewerId === "string" && body.reviewerId.trim()
+            ? body.reviewerId
+            : reviewerRole,
+        evidenceVersion,
+        traceId,
+        idempotencyKey,
+      },
+    );
+    return { ...session, qualityReview };
   });
 }

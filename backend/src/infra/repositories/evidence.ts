@@ -238,7 +238,7 @@ export class EvidenceRepository {
     ensureProjectWritable(connection, testCase.projectId);
     connection
       .prepare(
-        "INSERT INTO test_cases (id,project_id,task_id,acceptance_criteria_json,preconditions,steps,expected_result,test_type,owner_role,created_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO test_cases (id,project_id,task_id,acceptance_criteria_json,preconditions,steps,expected_result,test_type,owner_role,strategy_id,created_at,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         testCase.id,
@@ -254,6 +254,7 @@ export class EvidenceRepository {
         testCase.expectedResult,
         testCase.testType,
         testCase.ownerRole,
+        testCase.strategyId ?? null,
         testCase.createdAt,
         testCase.version,
       );
@@ -264,7 +265,7 @@ export class EvidenceRepository {
     ensureProjectChild(connection, "test_cases", run.projectId, run.testCaseId);
     connection
       .prepare(
-        "INSERT INTO test_runs (id,project_id,task_id,test_case_id,baseline_version_id,command_or_steps,environment_json,started_at,ended_at,actual_result,exit_code,status,evidence_version_id,trace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO test_runs (id,project_id,task_id,test_case_id,baseline_version_id,baseline_review_id,command_or_steps,environment_json,started_at,ended_at,actual_result,exit_code,status,evidence_version_id,evidence_refs_json,executed_by_role,trace_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         run.id,
@@ -272,6 +273,7 @@ export class EvidenceRepository {
         run.taskId,
         run.testCaseId,
         run.baselineVersionId,
+        run.baselineReviewId ?? null,
         run.commandOrSteps,
         jsonText(run.environment),
         run.startedAt,
@@ -280,6 +282,8 @@ export class EvidenceRepository {
         run.exitCode,
         run.status,
         run.evidenceVersionId,
+        jsonText(run.evidenceRefs ?? []),
+        run.executedByRole ?? null,
         run.traceId,
       );
   }
@@ -428,6 +432,7 @@ type TestCaseRow = {
   expected_result: string;
   test_type: string;
   owner_role: string;
+  strategy_id: string | null;
   created_at: string;
   version: number;
 };
@@ -437,6 +442,7 @@ type TestRunRow = {
   task_id: string | null;
   test_case_id: string;
   baseline_version_id: string | null;
+  baseline_review_id: string | null;
   command_or_steps: string;
   environment_json: string;
   started_at: string;
@@ -445,6 +451,8 @@ type TestRunRow = {
   exit_code: number | null;
   status: string;
   evidence_version_id: string | null;
+  evidence_refs_json: string;
+  executed_by_role: string | null;
   trace_id: string;
 };
 type DefectRow = {
@@ -595,6 +603,7 @@ function testCaseFromRow(row: TestCaseRow): TestCase {
     expectedResult: row.expected_result,
     testType: row.test_type,
     ownerRole: row.owner_role,
+    strategyId: row.strategy_id,
     createdAt: row.created_at,
     version: row.version,
   };
@@ -606,6 +615,7 @@ function testRunFromRow(row: TestRunRow): TestRun {
     taskId: row.task_id,
     testCaseId: row.test_case_id,
     baselineVersionId: row.baseline_version_id,
+    baselineReviewId: row.baseline_review_id,
     commandOrSteps: row.command_or_steps,
     environment: jsonValue(row.environment_json),
     startedAt: row.started_at,
@@ -614,6 +624,8 @@ function testRunFromRow(row: TestRunRow): TestRun {
     exitCode: row.exit_code,
     status: row.status,
     evidenceVersionId: row.evidence_version_id,
+    evidenceRefs: jsonValue(row.evidence_refs_json),
+    executedByRole: row.executed_by_role,
     traceId: row.trace_id,
   };
 }

@@ -50,6 +50,7 @@ import { registerResearchRoutes } from "./api/research.js";
 import { ResearchWorkflow } from "./application/research-workflow.js";
 import { ResearchAdapter } from "./research/adapter.js";
 import { registerCodingRoutes } from "./api/coding.js";
+import { registerQualityRoutes } from "./api/quality.js";
 import { NativeCodingHarness } from "./coding/native-harness.js";
 import { WorkspaceManager } from "./execution/workspace-manager.js";
 import { FileGateway } from "./execution/file-gateway.js";
@@ -59,6 +60,7 @@ import {
 } from "./execution/command-gateway.js";
 import { VerificationOrchestrator } from "./execution/verification.js";
 import { OrganizationService } from "./application/organization-service.js";
+import { QualityFlowService } from "./application/quality-flow.js";
 import {
   PlaywrightResearchBrowser,
   UnavailableResearchBrowser,
@@ -87,6 +89,7 @@ export type RuntimeState = {
   modelSettings: ModelSettingsService;
   researchWorkflow: ResearchWorkflow;
   codingHarness: NativeCodingHarness;
+  qualityFlow: QualityFlowService;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -188,6 +191,7 @@ export function createApp(options: {
     ),
     roleResolver: (roleId) => organization.getRole(roleId),
   });
+  const qualityFlow = new QualityFlowService(database);
   const runtime: RuntimeState = {
     settings,
     database,
@@ -205,6 +209,7 @@ export function createApp(options: {
     modelSettings,
     researchWorkflow,
     codingHarness,
+    qualityFlow,
     schemaInitializationError,
     testMode,
   };
@@ -282,7 +287,12 @@ export function createApp(options: {
   registerModelSettingsRoutes(app, { testMode });
   registerExecutionRoutes(app, { testMode });
   registerResearchRoutes(app, { testMode });
-  registerCodingRoutes(app, { testMode, harness: codingHarness });
+  registerCodingRoutes(app, {
+    testMode,
+    harness: codingHarness,
+    qualityFlow,
+  });
+  registerQualityRoutes(app, { testMode, qualityFlow });
   return app;
 }
 

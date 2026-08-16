@@ -29,6 +29,8 @@ import {
   migrateModelGatewaySchema,
   migrateResearchSchema,
   migrateCodingSchema,
+  migrateQualityFlowSchema,
+  migrateQualityTraceLinkTriggers,
   ORGANIZATION_INDEX_DEFINITIONS,
   WORKFLOW_INDEX_DEFINITIONS,
   WORKFLOW_REQUIRED_INDEX_NAMES,
@@ -39,6 +41,9 @@ import {
   RESEARCH_TABLES,
   CODING_TABLES,
   CODING_INDEX_DEFINITIONS,
+  QUALITY_TABLES,
+  QUALITY_INDEX_DEFINITIONS,
+  QUALITY_REQUIRED_INDEX_DEFINITIONS,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
@@ -190,6 +195,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -218,6 +224,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -245,6 +252,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -271,6 +279,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -296,6 +305,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0005_task4_workflow") {
         const callback =
           backupCallback ??
@@ -320,6 +330,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0006_task4_workflow_hardening") {
         const callback =
           backupCallback ??
@@ -343,6 +354,7 @@ export class Database {
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0007_task5_model_gateway") {
         const callback =
           backupCallback ??
@@ -365,6 +377,7 @@ export class Database {
           );
         migrateResearchSchema(this.connection);
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
       } else if (current === "0008_task6_research") {
         const callback =
           backupCallback ??
@@ -386,12 +399,35 @@ export class Database {
             "修复 Task 7 迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateCodingSchema(this.connection);
+        migrateQualityFlowSchema(this.connection);
+      } else if (current === "0009_task7_coding") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复 Task 8 迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateQualityFlowSchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
+        migrateQualityTraceLinkTriggers(this.connection);
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0009_task7_coding",
+          "备份持久化根目录并沿批准路径升级到 0010_task8_quality_flow",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -642,6 +678,14 @@ export class Database {
         "coding_observations",
         "coding_actions",
         "coding_sessions",
+        "regression_results",
+        "regression_requests",
+        "defect_fix_requests",
+        "npi_analyses",
+        "quality_reviews",
+        "test_strategies",
+        "task_quality_specs",
+        "quality_idempotency",
         "research_security_events",
         "pm_peer_reviews",
         "prd_versions",
@@ -724,6 +768,7 @@ export class Database {
       ...MODEL_GATEWAY_TABLES,
       ...RESEARCH_TABLES,
       ...CODING_TABLES,
+      ...QUALITY_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -1172,6 +1217,99 @@ export class Database {
         "created_at",
         "reviewed_at",
       ],
+      task_quality_specs: [
+        "id",
+        "project_id",
+        "task_id",
+        "task_version",
+        "acceptance_criteria_json",
+        "expected_artifact_types_json",
+        "workspace_policy",
+        "verification_profile",
+        "stack_profile",
+        "baseline_commit",
+        "allowed_paths_json",
+        "forbidden_paths_json",
+        "conversion_note",
+        "created_by",
+        "created_at",
+      ],
+      test_strategies: [
+        "id",
+        "project_id",
+        "acceptance_criteria_json",
+        "test_types_json",
+        "environment_json",
+        "owner_role",
+        "status",
+        "version",
+      ],
+      quality_reviews: [
+        "id",
+        "project_id",
+        "task_id",
+        "decision",
+        "comments",
+        "reviewer_role",
+        "reviewer_id",
+        "task_version",
+        "trace_id",
+        "idempotency_key",
+      ],
+      npi_analyses: [
+        "id",
+        "project_id",
+        "defect_id",
+        "reproduction",
+        "root_cause",
+        "impact",
+        "recommended_fix",
+        "owner_role",
+        "trace_id",
+        "idempotency_key",
+      ],
+      defect_fix_requests: [
+        "id",
+        "project_id",
+        "defect_id",
+        "fix_description",
+        "submitted_by",
+        "status",
+        "trace_id",
+        "idempotency_key",
+      ],
+      regression_requests: [
+        "id",
+        "project_id",
+        "defect_id",
+        "fix_request_id",
+        "scope",
+        "requested_by",
+        "status",
+        "trace_id",
+        "idempotency_key",
+      ],
+      regression_results: [
+        "id",
+        "project_id",
+        "defect_id",
+        "regression_request_id",
+        "test_run_id",
+        "status",
+        "evidence_refs_json",
+        "executed_by_role",
+        "trace_id",
+        "idempotency_key",
+      ],
+      quality_idempotency: [
+        "id",
+        "project_id",
+        "operation",
+        "idempotency_key",
+        "request_hash",
+        "response_json",
+        "created_at",
+      ],
     };
     for (const [table, columns] of Object.entries(requiredColumns))
       this.ensureColumns(table, columns);
@@ -1384,6 +1522,46 @@ export class Database {
         throw this.schemaConflict(
           SUPPORTED_SCHEMA_REVISION,
           `恢复 ${table} 的 Task 7 查询索引后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const [table, index, columns] of QUALITY_INDEX_DEFINITIONS) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      const actualColumns = (
+        this.connection.prepare(`PRAGMA index_info(${index})`).all() as {
+          seq: number;
+          name: string;
+        }[]
+      )
+        .sort((left, right) => left.seq - right.seq)
+        .map((column) => column.name)
+        .join(",");
+      if (!found || actualColumns !== columns)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 ${table} 的 Task 8 查询索引 ${index} 后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const [table, index, columns] of QUALITY_REQUIRED_INDEX_DEFINITIONS) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      const actualColumns = (
+        this.connection.prepare(`PRAGMA index_info(${index})`).all() as {
+          seq: number;
+          name: string;
+        }[]
+      )
+        .sort((left, right) => left.seq - right.seq)
+        .map((column) => column.name)
+        .join(",");
+      if (!found || actualColumns !== columns)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 ${table} 的 Task 8 复合外键唯一索引 ${index} 后重试`,
           "SCHEMA_INTEGRITY_CONFLICT",
         );
     }
