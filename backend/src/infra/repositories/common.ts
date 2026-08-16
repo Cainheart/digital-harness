@@ -17,6 +17,12 @@ const PROJECT_CHILD_ID_COLUMNS: Record<string, string> = {
   tool_calls: "id",
   notifications: "id",
   domain_events: "event_id",
+  coding_sessions: "id",
+  coding_actions: "id",
+  coding_observations: "id",
+  coding_checkpoints: "id",
+  coding_verification_runs: "id",
+  coding_handoffs: "id",
 };
 
 /** 将 SQLite 行中的 JSON 文本解析为结构化值。 */

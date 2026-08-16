@@ -28,6 +28,7 @@ import {
   migrateWorkflowHardeningSchema,
   migrateModelGatewaySchema,
   migrateResearchSchema,
+  migrateCodingSchema,
   ORGANIZATION_INDEX_DEFINITIONS,
   WORKFLOW_INDEX_DEFINITIONS,
   WORKFLOW_REQUIRED_INDEX_NAMES,
@@ -36,6 +37,8 @@ import {
   MODEL_GATEWAY_TABLES,
   MODEL_GATEWAY_INDEX_DEFINITIONS,
   RESEARCH_TABLES,
+  CODING_TABLES,
+  CODING_INDEX_DEFINITIONS,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
@@ -186,6 +189,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -213,6 +217,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -239,6 +244,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -264,6 +270,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -288,6 +295,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0005_task4_workflow") {
         const callback =
           backupCallback ??
@@ -311,6 +319,7 @@ export class Database {
         migrateWorkflowHardeningSchema(this.connection);
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0006_task4_workflow_hardening") {
         const callback =
           backupCallback ??
@@ -333,6 +342,7 @@ export class Database {
           );
         migrateModelGatewaySchema(this.connection);
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
       } else if (current === "0007_task5_model_gateway") {
         const callback =
           backupCallback ??
@@ -354,12 +364,34 @@ export class Database {
             "修复迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateResearchSchema(this.connection);
+        migrateCodingSchema(this.connection);
+      } else if (current === "0008_task6_research") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复 Task 7 迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateCodingSchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0008_task6_research",
+          "备份持久化根目录并沿批准路径升级到 0009_task7_coding",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -604,6 +636,12 @@ export class Database {
     const now = new Date().toISOString();
     this.controlledProjectPurge(projectId, (db) => {
       for (const table of [
+        "coding_handoffs",
+        "coding_verification_runs",
+        "coding_checkpoints",
+        "coding_observations",
+        "coding_actions",
+        "coding_sessions",
         "research_security_events",
         "pm_peer_reviews",
         "prd_versions",
@@ -685,6 +723,7 @@ export class Database {
       ...WORKFLOW_TABLES,
       ...MODEL_GATEWAY_TABLES,
       ...RESEARCH_TABLES,
+      ...CODING_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -1046,6 +1085,93 @@ export class Database {
         "trace_id",
         "created_at",
       ],
+      coding_sessions: [
+        "id",
+        "project_id",
+        "task_id",
+        "attempt_id",
+        "role",
+        "status",
+        "spec_json",
+        "grant_json",
+        "plan_json",
+        "workspace_path",
+        "baseline_manifest_json",
+        "current_diff_summary",
+        "next_action",
+        "failure_diagnoses_json",
+        "verification_ids_json",
+        "patch_seq_json",
+        "read_files_json",
+        "changed_files_json",
+        "version",
+        "trace_id",
+        "created_at",
+        "updated_at",
+      ],
+      coding_actions: [
+        // 修改日期：2026-08-17
+        // 修改原因：启动完整性检查必须覆盖动作终态、观察拒绝原因和 Review 字段，避免半成品表结构运行到业务请求才失败。
+        "id",
+        "project_id",
+        "session_id",
+        "seq",
+        "type",
+        "action_json",
+        "reason",
+        "idempotency_key",
+        "status",
+        "observation_id",
+        "trace_id",
+        "created_at",
+      ],
+      coding_observations: [
+        "id",
+        "project_id",
+        "session_id",
+        "action_id",
+        "status",
+        "rejection_reason",
+        "result_json",
+        "trace_id",
+        "created_at",
+      ],
+      coding_checkpoints: [
+        "id",
+        "project_id",
+        "session_id",
+        "patch_seq",
+        "state_json",
+        "workspace_snapshot",
+        "reason",
+        "trace_id",
+        "created_at",
+      ],
+      coding_verification_runs: [
+        "id",
+        "project_id",
+        "session_id",
+        "profile",
+        "status",
+        "steps_json",
+        "failure_class",
+        "retry_count",
+        "trace_id",
+        "created_at",
+        "completed_at",
+      ],
+      coding_handoffs: [
+        "id",
+        "project_id",
+        "session_id",
+        "status",
+        "package_json",
+        "review_decision",
+        "review_comments",
+        "reviewed_by",
+        "created_at",
+        "reviewed_at",
+      ],
     };
     for (const [table, columns] of Object.entries(requiredColumns))
       this.ensureColumns(table, columns);
@@ -1238,6 +1364,26 @@ export class Database {
         throw this.schemaConflict(
           SUPPORTED_SCHEMA_REVISION,
           `恢复 ${table} 的 Task 5 查询索引 ${index} 后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const [table, index, columns] of CODING_INDEX_DEFINITIONS) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      const actualColumns = (
+        this.connection.prepare(`PRAGMA index_info(${index})`).all() as {
+          seq: number;
+          name: string;
+        }[]
+      )
+        .sort((left, right) => left.seq - right.seq)
+        .map((column) => column.name)
+        .join(",");
+      if (!found || actualColumns !== columns)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 ${table} 的 Task 7 查询索引后重试`,
           "SCHEMA_INTEGRITY_CONFLICT",
         );
     }

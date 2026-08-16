@@ -1,6 +1,5 @@
 /** 当前运行时要求的最后一个已验收持久化合同版本。 */
-export const SUPPORTED_SCHEMA_REVISION =
-  "0008_task6_research" as const;
+export const SUPPORTED_SCHEMA_REVISION = "0009_task7_coding" as const;
 
 /** 拒绝让配置、迁移目标和 readiness 使用不同的兼容基线。 */
 export function validateSchemaRevision(

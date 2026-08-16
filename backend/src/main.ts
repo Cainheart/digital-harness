@@ -43,18 +43,22 @@ import { registerWorkflowRoutes } from "./api/workflow-routes.js";
 import { registerModelSettingsRoutes } from "./api/model-settings-routes.js";
 import { registerExecutionRoutes } from "./api/execution-routes.js";
 import { ModelSettingsService } from "./application/model-settings.js";
-import {
-  DeepSeekAdapter,
-  OpenAiAdapter,
-} from "./gateway/model/index.js";
-import {
-  ModelAdapterRegistry,
-  ModelGateway,
-} from "./gateway/model/gateway.js";
+import { DeepSeekAdapter, OpenAiAdapter } from "./gateway/model/index.js";
+import { ModelAdapterRegistry, ModelGateway } from "./gateway/model/gateway.js";
 import { SqliteModelCallRecorder } from "./observability/model-call-recorder.js";
 import { registerResearchRoutes } from "./api/research.js";
 import { ResearchWorkflow } from "./application/research-workflow.js";
 import { ResearchAdapter } from "./research/adapter.js";
+import { registerCodingRoutes } from "./api/coding.js";
+import { NativeCodingHarness } from "./coding/native-harness.js";
+import { WorkspaceManager } from "./execution/workspace-manager.js";
+import { FileGateway } from "./execution/file-gateway.js";
+import {
+  CommandGateway,
+  DockerCommandRunner,
+} from "./execution/command-gateway.js";
+import { VerificationOrchestrator } from "./execution/verification.js";
+import { OrganizationService } from "./application/organization-service.js";
 import {
   PlaywrightResearchBrowser,
   UnavailableResearchBrowser,
@@ -82,6 +86,7 @@ export type RuntimeState = {
   modelGateway: ModelGateway;
   modelSettings: ModelSettingsService;
   researchWorkflow: ResearchWorkflow;
+  codingHarness: NativeCodingHarness;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -169,6 +174,20 @@ export function createApp(options: {
     artifactStore,
     new ResearchAdapter(database, researchBrowser),
   );
+  const organization = new OrganizationService(database);
+  const workspaceManager = new WorkspaceManager(settings.workspacePath);
+  const fileGateway = new FileGateway(workspaceManager, artifactStore);
+  const codingHarness = new NativeCodingHarness({
+    database,
+    artifactStore,
+    workspaceManager,
+    fileGateway,
+    verifier: new VerificationOrchestrator(
+      new CommandGateway(new DockerCommandRunner()),
+      fileGateway,
+    ),
+    roleResolver: (roleId) => organization.getRole(roleId),
+  });
   const runtime: RuntimeState = {
     settings,
     database,
@@ -185,6 +204,7 @@ export function createApp(options: {
     modelGateway,
     modelSettings,
     researchWorkflow,
+    codingHarness,
     schemaInitializationError,
     testMode,
   };
@@ -262,6 +282,7 @@ export function createApp(options: {
   registerModelSettingsRoutes(app, { testMode });
   registerExecutionRoutes(app, { testMode });
   registerResearchRoutes(app, { testMode });
+  registerCodingRoutes(app, { testMode, harness: codingHarness });
   return app;
 }
 

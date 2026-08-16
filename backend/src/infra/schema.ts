@@ -69,7 +69,11 @@ export const MODEL_GATEWAY_TABLES = [
 ] as const;
 /** Task 5 模型调用字段和查询索引的固定合同。 */
 export const MODEL_GATEWAY_INDEX_DEFINITIONS = [
-  ["model_config_changes", "ix_model_config_changes_domain_created", "domain,created_at"],
+  [
+    "model_config_changes",
+    "ix_model_config_changes_domain_created",
+    "domain,created_at",
+  ],
   ["model_calls", "ix_model_calls_domain_model", "domain,model"],
   ["model_calls", "ix_model_calls_trace_id", "trace_id"],
 ] as const;
@@ -145,6 +149,43 @@ export const RESEARCH_TABLE_ORDER = [
 ] as const;
 /** 用于启动完整性检查的 Task 6 表集合。 */
 export const RESEARCH_TABLES = new Set<string>(RESEARCH_TABLE_ORDER);
+/** Task 7 编码会话、动作、观察、验证和交接事实表。 */
+export const CODING_TABLE_ORDER = [
+  "coding_sessions",
+  "coding_actions",
+  "coding_observations",
+  "coding_checkpoints",
+  "coding_verification_runs",
+  "coding_handoffs",
+] as const;
+/** 用于启动完整性检查的 Task 7 表集合。 */
+export const CODING_TABLES = new Set<string>(CODING_TABLE_ORDER);
+/** Task 7 按 Attempt、会话和项目查询证据的固定索引。 */
+export const CODING_INDEX_DEFINITIONS = [
+  [
+    "coding_sessions",
+    "ix_coding_sessions_project_updated",
+    "project_id,updated_at",
+  ],
+  ["coding_sessions", "ix_coding_sessions_attempt", "attempt_id"],
+  ["coding_actions", "ix_coding_actions_session_seq", "session_id,seq"],
+  [
+    "coding_observations",
+    "ix_coding_observations_session_created",
+    "session_id,created_at",
+  ],
+  [
+    "coding_checkpoints",
+    "ix_coding_checkpoints_session_created",
+    "session_id,created_at",
+  ],
+  [
+    "coding_verification_runs",
+    "ix_coding_verification_session_created",
+    "session_id,created_at",
+  ],
+  ["coding_handoffs", "ix_coding_handoffs_session", "session_id"],
+] as const;
 /** Task 6 查询使用的固定复合索引。 */
 export const RESEARCH_INDEX_DEFINITIONS = [
   ["research_grants", "ix_research_grants_project_task", "project_id,task_id"],
@@ -210,6 +251,7 @@ export const RESEARCH_PROJECT_SCOPED_TABLES = RESEARCH_TABLE_ORDER;
 export const ALL_PROJECT_SCOPED_TABLES = [
   ...PROJECT_SCOPED_TABLES,
   ...RESEARCH_PROJECT_SCOPED_TABLES,
+  ...CODING_TABLE_ORDER,
 ] as const;
 /** 为项目范围表生成固定的 project_id 索引名，供 migration 和完整性检查共用。 */
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries(
@@ -697,9 +739,7 @@ export function migrateWorkflowHardeningSchema(
  * 修改日期：2026-08-16。
  * 修改原因：Task 5 要求配置版本、凭据引用、模型调用生命周期和脱敏摘要具备可恢复的持久化合同。
  */
-export function migrateModelGatewaySchema(
-  db: BetterSqlite3.Database,
-): void {
+export function migrateModelGatewaySchema(db: BetterSqlite3.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS model_configs (
       domain TEXT PRIMARY KEY CHECK (domain IN (${ORGANIZATION_DOMAIN_IDS.map((domain) => `'${domain}'`).join(",")})),
@@ -734,7 +774,9 @@ export function migrateModelGatewaySchema(
     "model_retry_max_attempts INTEGER",
   ]) {
     const name = definition.split(" ", 1)[0];
-    const columns = db.prepare("PRAGMA table_info(execution_attempts)").all() as {
+    const columns = db
+      .prepare("PRAGMA table_info(execution_attempts)")
+      .all() as {
       name: string;
     }[];
     if (!columns.some((column) => column.name === name)) {
@@ -763,11 +805,15 @@ export function migrateModelGatewaySchema(
       db.exec(`ALTER TABLE model_calls ADD COLUMN ${definition}`);
     }
   }
-  const changeColumns = db.prepare("PRAGMA table_info(model_config_changes)").all() as {
+  const changeColumns = db
+    .prepare("PRAGMA table_info(model_config_changes)")
+    .all() as {
     name: string;
   }[];
   if (!changeColumns.some((column) => column.name === "request_hash")) {
-    db.exec("ALTER TABLE model_config_changes ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''");
+    db.exec(
+      "ALTER TABLE model_config_changes ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''",
+    );
   }
   for (const domain of ORGANIZATION_DOMAIN_IDS) {
     db.prepare(
@@ -902,6 +948,128 @@ export function migrateResearchSchema(db: BetterSqlite3.Database): void {
   );
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0008_task6_research",
+  );
+}
+
+/**
+ * 创建 Task 7 编码 Agent 的持久化合同；原始动作/观察和检查点不可被投影覆盖。
+ * 修改日期：2026-08-17。
+ * 修改原因：NativeCodingHarness 必须在进程重启、暂停和 Worker 崩溃后恢复，不能只依赖内存状态。
+ */
+export function migrateCodingSchema(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS coding_sessions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('CREATED','CONTEXT_BUILDING','PLAN_READY','POLICY_PENDING','IMPLEMENTING','VERIFYING','DIAGNOSING','REVIEW_REQUESTED','PAUSED','BLOCKED','CANCELLED','COMPLETED')),
+      spec_json TEXT NOT NULL CHECK (json_valid(spec_json) = 1),
+      grant_json TEXT NOT NULL CHECK (json_valid(grant_json) = 1),
+      plan_json TEXT CHECK (plan_json IS NULL OR json_valid(plan_json) = 1),
+      workspace_path TEXT NOT NULL,
+      baseline_manifest_json TEXT NOT NULL CHECK (json_valid(baseline_manifest_json) = 1),
+      current_diff_summary TEXT NOT NULL,
+      next_action TEXT NOT NULL,
+      failure_diagnoses_json TEXT NOT NULL CHECK (json_valid(failure_diagnoses_json) = 1),
+      verification_ids_json TEXT NOT NULL CHECK (json_valid(verification_ids_json) = 1),
+      patch_seq_json TEXT NOT NULL CHECK (json_valid(patch_seq_json) = 1),
+      read_files_json TEXT NOT NULL CHECK (json_valid(read_files_json) = 1),
+      changed_files_json TEXT NOT NULL CHECK (json_valid(changed_files_json) = 1),
+      version INTEGER NOT NULL CHECK (version >= 1),
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project_id,id),
+      UNIQUE(project_id,attempt_id),
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id),
+      FOREIGN KEY(project_id,attempt_id) REFERENCES execution_attempts(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS coding_actions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      session_id TEXT NOT NULL,
+      seq INTEGER NOT NULL CHECK (seq >= 1),
+      type TEXT NOT NULL,
+      action_json TEXT NOT NULL CHECK (json_valid(action_json) = 1),
+      reason TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK (status IN ('proposed','running','succeeded','failed','rejected')),
+      observation_id TEXT,
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(session_id,seq),
+      FOREIGN KEY(project_id,session_id) REFERENCES coding_sessions(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS coding_observations (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      session_id TEXT NOT NULL,
+      action_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('succeeded','failed','rejected')),
+      rejection_reason TEXT,
+      result_json TEXT NOT NULL CHECK (json_valid(result_json) = 1),
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,session_id) REFERENCES coding_sessions(project_id,id),
+      FOREIGN KEY(action_id) REFERENCES coding_actions(id)
+    );
+    CREATE TABLE IF NOT EXISTS coding_checkpoints (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      session_id TEXT NOT NULL,
+      patch_seq INTEGER NOT NULL CHECK (patch_seq >= 0),
+      state_json TEXT NOT NULL CHECK (json_valid(state_json) = 1),
+      workspace_snapshot TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,session_id) REFERENCES coding_sessions(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS coding_verification_runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      session_id TEXT NOT NULL,
+      profile TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('succeeded','failed','blocked')),
+      steps_json TEXT NOT NULL CHECK (json_valid(steps_json) = 1),
+      failure_class TEXT,
+      retry_count INTEGER NOT NULL CHECK (retry_count >= 0),
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      UNIQUE(project_id,id),
+      FOREIGN KEY(project_id,session_id) REFERENCES coding_sessions(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS coding_handoffs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      session_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('review_requested','approved','changes_requested','blocked')),
+      package_json TEXT NOT NULL CHECK (json_valid(package_json) = 1),
+      review_decision TEXT,
+      review_comments TEXT,
+      reviewed_by TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      UNIQUE(project_id,id),
+      UNIQUE(session_id),
+      FOREIGN KEY(project_id,session_id) REFERENCES coding_sessions(project_id,id)
+    );
+  `);
+  for (const [table, index, columns] of CODING_INDEX_DEFINITIONS) {
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  }
+  for (const table of CODING_TABLE_ORDER) {
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS ix_${table}_project_id ON ${table} (project_id)`,
+    );
+  }
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0009_task7_coding",
   );
 }
 

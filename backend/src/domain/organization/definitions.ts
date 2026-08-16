@@ -379,7 +379,18 @@ const DEVELOPMENT_PATH = {
 } satisfies PathPolicy;
 /** 开发岗位命令白名单；命令参数由 Policy Gate 继续检查。 */
 const DEVELOPMENT_COMMANDS = {
-  allowedCommands: ["node", "npm", "pnpm", "npx", "git", "tsc", "vitest"],
+  // 修改日期：2026-08-17
+  // 修改原因：Task 7 的 backend-default VerificationProfile 包含 ruff check，开发角色必须显式授予该固定检查命令，仍受 Grant 和 PolicyGate 双重限制。
+  allowedCommands: [
+    "node",
+    "npm",
+    "pnpm",
+    "npx",
+    "git",
+    "tsc",
+    "vitest",
+    "ruff",
+  ],
   forbiddenCommands: ["rm", "sudo", "curl", "wget", "ssh"],
 } satisfies CommandPolicy;
 /** 测试岗位命令白名单；不包含 git 和可能改变源码的命令。 */
