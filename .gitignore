@@ -1,0 +1,12 @@
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/*.egg-info/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+coverage/
+*.log
+.DS_Store
