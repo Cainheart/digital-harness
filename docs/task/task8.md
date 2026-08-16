@@ -240,11 +240,11 @@ POST /api/v1/defects/{defectId}/regression-result
 
 需要使用：
 
-- Python/FastAPI/Pydantic/SQLAlchemy；
+- Node.js/TypeScript/Fastify/TypeBox/Drizzle ORM；
 - task2.md 的对象、事件、Artifact 和 TraceLink；
 - task4.md 的任务状态、审批和调度；
 - task7.md 的 NativeCodingHarness、VerificationRun、Docker 和 Handoff；
-- pytest、真实测试命令、前后端 Profile、E2E 测试和缺陷回归测试。
+- Vitest、真实测试命令、前后端 Profile、E2E 测试和缺陷回归测试。
 
 ## 6. 验收标准与验收方法
 
@@ -262,11 +262,13 @@ POST /api/v1/defects/{defectId}/regression-result
 | T8-AC-10 | 回归失败 | 回归再次失败 | 缺陷保持打开，生成新的失败/风险关联，不允许结项。 |
 | T8-AC-11 | 阻断性缺陷放行 | 存在未关闭阻断性缺陷提交测试放行 | 提交或通过均被拒绝，并显示缺陷证据。 |
 | T8-AC-12 | 追踪完整性 | 从验收标准检查任务、用例、TestRun、Defect、Fix、Regression | 关键对象断链数为 0。 |
+| T8-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 8 在从最新 `master` 创建的 `dev/task-8` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 AS-05、AS-06 和 AS-17 必须分别保留 Review 驳回局部返工、测试失败/NPI 回归和编码 Agent 中断恢复的完整链路。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-8` 分支创建一次可识别的 Task 8 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 每条批准验收标准至少关联测试用例。
 - 测试基线只能来自开发代表 Review 通过的版本。
 - 测试失败、缺陷、NPI 修复、回归和关闭结论形成完整追踪链。

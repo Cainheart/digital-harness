@@ -134,7 +134,7 @@ PRD 版本必须关联来源目录、成功指标、PM 交叉评审、争议记�
 
 ### 4.1 Research Adapter
 
-~~~python
+~~~typescript
 class ResearchAdapter(Protocol):
     async def search(
         self,
@@ -234,7 +234,7 @@ POST /api/v1/projects/{projectId}/research/peer-review
 - task3.md 的 PM 角色和结构化消息；
 - task4.md 的任务/审批/阻塞机制；
 - task5.md 的真实模型调用和脱敏；
-- pytest、浏览器集成测试、恶意网页样本和 HTTP 失败模拟。
+- Vitest、Playwright 浏览器集成测试、恶意网页样本和 HTTP 失败模拟。
 
 ## 6. 验收标准与验收方法
 
@@ -250,11 +250,13 @@ POST /api/v1/projects/{projectId}/research/peer-review
 | T6-AC-08 | 外部服务失败 | 模拟浏览器启动失败、超时、HTTP 错误 | 当前调研任务可解释阻塞，已保存数据不丢失。 |
 | T6-AC-09 | Boss PRD 审批前置 | 删除成功指标或关键来源后提交审批 | PRD 不能进入 Boss 审批，并说明缺失对象。 |
 | T6-AC-10 | 追踪链 | 从结论打开来源、报告、PRD 和 PM 评审 | 所有对象可双向定位到同一项目/任务/事件。 |
+| T6-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 6 在从最新 `master` 创建的 `dev/task-6` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 验收证据包括：浏览器访问记录、来源 JSON、页面哈希、引用 Artifact、PM 核验记录、提示注入事件、PRD 版本和审批前校验结果。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-6` 分支创建一次可识别的 Task 6 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - ResearchGrant、来源对象、结论校验和 PM 交叉评审接口冻结。
 - 证据不足的方向结论无法进入 Boss 审批。
 - 网页提示注入不能改变角色、流程和工具权限。

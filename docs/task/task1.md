@@ -1,7 +1,7 @@
 # Task 1：本地运行骨架、运行准备与持久化根目录
 
 > 任务编号：DEV-01
-> 任务状态：已实现，真实环境验收通过（2026-08-13）
+> 任务状态：实现与自动化验收通过，提交待用户确认（2026-08-16）
 > 任务类型：基础设施、应用生命周期、安全边界
 > 前置任务：无
 > 后续消费者：task2.md、task3.md、task4.md、task5.md、task7.md、task10.md、task11.md
@@ -34,8 +34,8 @@
 
 ### 2.3 设计依据
 
-- 总体概要设计 §2.3、§3.1～§3.2、§8、§9：FastAPI 控制面、SQLite WAL、本地证据库、OS Keychain、Docker 和 127.0.0.1。
-- BIMA 详细设计 §3.3、§12、§14：Python 控制进程、SQLite WAL、Artifact Store、Checkpoint、Keychain 和安全失败。
+- 总体概要设计 §2.3、§3.1～§3.2、§8、§9：Node.js/TypeScript + Fastify 控制面、SQLite WAL、本地证据库、OS Keychain、Docker 和 127.0.0.1。
+- BIMA 详细设计 §3.3、§12、§14：Node.js/TypeScript 控制进程、SQLite WAL、Artifact Store、Checkpoint、Keychain 和安全失败。
 
 ## 3. 具体交付物
 
@@ -44,15 +44,15 @@
 建议创建或固定以下逻辑目录；如果工程初始化时目录名称不同，必须在实现记录中建立一一对应关系：
 
 ~~~text
-backend/app/bootstrap/
-backend/app/config/
-backend/app/api/readiness.py
-backend/app/infra/persistence_root.py
-backend/app/infra/keychain.py
-backend/app/infra/database.py
-backend/app/infra/migrations/
-backend/app/lifecycle/
-worker/
+backend/src/bootstrap/
+backend/src/config/
+backend/src/api/readiness.ts
+backend/src/infra/persistence-root.ts
+backend/src/infra/keychain.ts
+backend/src/infra/database.ts
+backend/src/infra/migrations/
+backend/src/lifecycle/
+backend/src/worker/
 frontend/src/features/readiness/
 tests/unit/bootstrap/
 tests/integration/lifecycle/
@@ -75,7 +75,7 @@ tests/security/runtime_boundary/
    ~~~
 
 3. SQLite WAL 初始化、连接池/事务基础配置和数据库版本检查。
-4. Alembic migration 启动检查；当前数据库版本不兼容时禁止可写启动。
+4. Drizzle migration journal 启动检查；当前数据库版本不兼容时禁止可写启动。
 5. CredentialAdapter 接口和 OS Keychain 实现。数据库只保存 secretRef、provider、model、配置版本和连接状态。
 6. ReadinessView 查询 API 和前端准备状态展示所需的响应模型。
 7. 应用启动、停止、重启、Worker 租约检查和安全关闭流程。
@@ -134,7 +134,7 @@ GET /api/v1/readiness
     },
     "persistence": {
       "status": "ready",
-      "schemaRevision": "2026_08_12_001",
+      "schemaRevision": "0003_task2_integrity_trace_fix",
       "persistentRoot": "configured"
     }
   },
@@ -149,19 +149,17 @@ status 至少支持 ready、blocked、degraded。检查失败时不得返回可�
 
 业务数据库只能保存引用，凭据适配器负责明文的短时读取：
 
-~~~python
-class CredentialAdapter(Protocol):
-    async def save(self, provider: str, secret: str) -> str:
-        """保存到 OS Keychain，仅返回 secretRef。"""
-
-    async def read(self, secret_ref: str) -> SecretLease:
-        """在外部调用边界短时读取，不允许进入业务对象或日志。"""
-
-    async def delete(self, secret_ref: str) -> None:
-        """删除 Keychain 中的凭据。"""
-
-    async def check(self, secret_ref: str) -> CredentialCheckResult:
-        """返回可用性和脱敏错误，不返回明文。"""
+~~~typescript
+interface CredentialAdapter {
+  /** 保存到 OS Keychain，仅返回 secretRef。 */
+  save(provider: string, secret: string): Promise<string>;
+  /** 在外部调用边界短时读取，不允许进入业务对象或日志。 */
+  read(secretRef: string): Promise<SecretLease>;
+  /** 删除 Keychain 中的凭据。 */
+  delete(secretRef: string): Promise<void>;
+  /** 返回可用性和脱敏错误，不返回明文。 */
+  check(secretRef: string): Promise<CredentialCheckResult>;
+}
 ~~~
 
 SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用，不能进入 DomainEvent、Artifact、SSE 或前端响应。
@@ -192,7 +190,7 @@ SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用�
 ## 5. 开发实施方法
 
 1. 先建立配置对象和持久化根目录初始化器，测试“空目录首次启动”和“已有数据重启”两条路径。
-2. 接入 SQLite WAL 和 Alembic，先写 Schema 版本不兼容测试，再实现启动阻断。
+2. 接入 SQLite WAL 和 Drizzle migration，先写 Schema 版本不兼容测试，再实现启动阻断。
 3. 实现 Keychain 适配器，使用测试替身验证数据库、日志和响应中只有 secretRef。
 4. 实现 ReadinessView，把模型、网页、Docker、工作区和持久化检查拆成独立检查器，避免一个检查器吞掉其他失败原因。
 5. 加入本机监听、启动前无副作用和安全关闭逻辑。
@@ -201,12 +199,12 @@ SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用�
 
 需要使用：
 
-- Python 3.12、FastAPI、Pydantic v2、SQLAlchemy 2、Alembic；
+- Node.js 22 LTS、TypeScript、Fastify、TypeBox、Drizzle ORM、better-sqlite3；
 - SQLite WAL；
-- OS Keychain/ keyring；
+- OS Keychain/TypeScript CredentialAdapter；
 - Docker Engine 或 Docker Desktop；
 - React 18、TypeScript、Vite、TanStack Query；
-- pytest、HTTP 集成测试、文件系统临时目录和安全测试工具。
+- Vitest、Fastify inject、文件系统临时目录和安全测试工具。
 
 ## 6. 验收标准与验收方法
 
@@ -219,6 +217,7 @@ SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用�
 | T1-AC-05 | 凭据保护 | 写入测试 API Key，搜索数据库、日志、Artifact 和 API 响应 | 只有 Keychain 测试替身能读取明文；其他位置只出现掩码或 secretRef。 |
 | T1-AC-06 | 本机边界 | 从非 127.0.0.1 来源发起请求 | 请求被拒绝并产生脱敏安全事件。 |
 | T1-AC-07 | 应用重启不越过关卡 | 在等待 Boss 和已暂停状态重启 | 状态不自动变成运行中，不启动新任务，不产生重复执行。 |
+| T1-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 1 在从最新 `master` 创建的 `dev/task-1` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 验收证据必须包括：启动日志摘要、API 响应、数据库版本、目录清单、重启前后对象摘要、脱敏扫描结果和测试命令/退出码。
 
@@ -226,6 +225,7 @@ SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用�
 
 完成本任务必须同时满足：
 
+- 开发结束时已在 `dev/task-1` 分支创建一次可识别的 Task 1 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希；
 - GET /api/v1/readiness 可被前端和后续自动化验收调用；
 - 持久化根目录、数据库版本和 Keychain 边界有自动化测试；
 - 启动前无真实执行副作用；
@@ -235,4 +235,4 @@ SecretLease 只能在 Model Adapter 或 Research Adapter 的调用边界使用�
 
 本任务不允许以“页面能打开”作为完成依据；必须有真实启动检查、持久化和安全测试结果。
 
-桌面化边界：Task 1 的真实验收仍以“主机上的 Python/Uvicorn + React/Vite + Docker readiness”作为证据；它没有创建 Electron 工程、桌面安装包或 Python sidecar bundle。DEV-11 将在不改变本任务核心契约的前提下接入这些能力。
+桌面化边界：Task 1 的运行时验收以“主机上的 Node.js/TypeScript + Fastify + React/Vite + Docker readiness”作为证据；它没有创建 Electron 工程或桌面安装包。DEV-11 将在不改变本任务核心契约的前提下接入 Node.js/TypeScript sidecar 和桌面交付能力。

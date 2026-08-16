@@ -1,7 +1,7 @@
 // 后端 readiness 的状态集合；blocked/degraded 都不得直接开始真实执行。
 export type CheckStatus = "ready" | "blocked" | "degraded";
 
-// 与 FastAPI ReadinessView 对齐的单项检查契约。
+// 与 Node.js/TypeScript 控制面的 ReadinessView 对齐的单项检查契约。
 export type CheckView = {
   status: CheckStatus;
   message: string;

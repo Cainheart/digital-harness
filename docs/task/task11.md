@@ -10,7 +10,7 @@
 
 ## 1. 任务目标
 
-将 React/Vite 前端和 Python/FastAPI 控制面交付为 macOS/Windows 可安装桌面应用。用户双击启动后，Electron 负责创建窗口并管理 Python sidecar；sidecar 负责现有业务 API、readiness、持久化和后续 Agent/Worker 接入；Docker 继续作为受控代码、构建和测试执行的本地运行时。
+将 React/Vite 前端和 Node.js/TypeScript + Fastify 控制面交付为 macOS/Windows 可安装桌面应用。用户双击启动后，Electron 负责创建窗口并管理 Node.js/TypeScript sidecar；sidecar 负责现有业务 API、readiness、持久化和后续 Agent/Worker 接入；Docker 继续作为受控代码、构建和测试执行的本地运行时。
 
 本任务不是重新实现 Task 1 的运行骨架，也不是把前后端强行打包成 Docker 容器。Task 1 提供 readiness、StartupGate、SQLite WAL、Keychain、生命周期和本机访问基础；DEV-11 将这些能力接入桌面进程和安装升级流程。
 
@@ -32,7 +32,7 @@
 
 ### 2.3 概要设计
 
-- 工程概要设计 §2.5：Electron Main/Preload/Renderer 与 Python sidecar 边界。
+- 工程概要设计 §2.5：Electron Main/Preload/Renderer 与 Node.js/TypeScript sidecar 边界。
 - 工程概要设计 §3：桌面系统上下文和运行部署图。
 - 工程概要设计 §8：安装目录、持久化根目录、升级、备份和恢复。
 - Electron 桌面应用详细设计 §3～§9：进程、IPC、token、Docker、打包、失败和验收。
@@ -88,7 +88,7 @@ desktop/
 | macOS | arm64、x64 | `.app`、`.dmg` |
 | Windows | x64 | 安装 `.exe`；可选 `.msi` |
 
-Python sidecar 使用 PyInstaller 或等价方案打包；Electron 使用 electron-builder 或等价方案生成安装包。正式发布前补充 macOS notarization、Windows Authenticode 和可验证更新。
+Node.js/TypeScript sidecar 使用 electron-builder 的 bundled Node runtime 或等价方案打包；Electron 使用 electron-builder 生成安装包。正式发布前补充 macOS notarization、Windows Authenticode 和可验证更新。
 
 ## 4. 接口与数据设计
 
@@ -151,7 +151,7 @@ Windows: %APPDATA%\\DigitalCompany\\
 | --- | --- | --- |
 | T11-AC-01 | macOS 安装 | arm64 和 x64 安装包可安装、打开和卸载；用户数据不因卸载默认删除 |
 | T11-AC-02 | Windows 安装 | x64 安装包可安装、打开和卸载；用户数据目录独立 |
-| T11-AC-03 | 双击启动 | Electron 窗口出现，sidecar 自动启动，readiness 可查询；无需手动启动 Python/Node/浏览器 |
+| T11-AC-03 | 双击启动 | Electron 窗口出现，sidecar 自动启动，readiness 可查询；无需手动启动 Node.js/浏览器 |
 | T11-AC-04 | sidecar 生命周期 | 正常退出保存状态；端口/token/退出码异常有诊断；超时不伪造成功 |
 | T11-AC-05 | Preload 安全 | Renderer 无 Node、任意命令、任意路径和任意 URL 能力；只有白名单 API |
 | T11-AC-06 | Docker 缺失 | Docker 停止时可查看数据但阻断容器执行；Docker 恢复并重新 readiness 后恢复受影响动作 |
@@ -159,9 +159,11 @@ Windows: %APPDATA%\\DigitalCompany\\
 | T11-AC-08 | 不越过关卡 | 运行中、等待 Boss、已暂停、已阻塞状态重启后不自动推进、不生成重复执行 |
 | T11-AC-09 | 跨平台凭据 | macOS Keychain/Windows Credential Manager 中保存明文；Renderer、数据库、日志和包内无明文 |
 | T11-AC-10 | 视口与诊断 | 1280×720、1440×900 可完成关键动作；诊断显示版本/平台/架构/traceId 且已脱敏 |
+| T11-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 11 在从最新 `master` 创建的 `dev/task-11` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希 |
 
 ## 7. 完成定义
 
+- 开发结束时已在 `dev/task-11` 分支创建一次可识别的 Task 11 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - `T11-AC-01～10` 全部有自动化或跨平台实机证据；
 - `SR-DESK-001～012` 均有实现位置、测试用例和证据链接；
 - 安装目录与用户数据目录分离；

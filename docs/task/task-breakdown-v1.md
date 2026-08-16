@@ -25,7 +25,7 @@
 
 | 编号 | 任务文件 | 负责范围 | 主要交付物 | 前置任务 |
 |---|---|---|---|---|
-| DEV-01 | [task1.md](task1.md) | 本地运行环境与基础设施 | 配置加载、SQLite/Alembic、Keychain 适配、健康检查、启动与关闭流程 | 无 |
+| DEV-01 | [task1.md](task1.md) | 本地运行环境与基础设施 | 配置加载、SQLite/Drizzle migration、Keychain 适配、健康检查、启动与关闭流程 | 无 |
 | DEV-02 | [task2.md](task2.md) | 领域模型、事件、产物和追溯 | 核心实体、事件总线/Outbox、ArtifactStore、TraceLink、幂等和分页契约 | DEV-01 |
 | DEV-03 | [task3.md](task3.md) | 组织、角色、消息和策略 | 组织/员工/角色模型、消息协议、角色 PolicyGate、权限和审计 | DEV-01、DEV-02 |
 | DEV-04 | [task4.md](task4.md) | 项目工作流和任务调度 | 项目/任务状态机、事件流、审批、调度、暂停/终止/恢复 | DEV-02、DEV-03 |
@@ -35,7 +35,7 @@
 | DEV-08 | [task8.md](task8.md) | Review、测试、缺陷与 NPI | Review Gate、测试策略/用例/执行、缺陷生命周期、NPI、回归和质量证据 | DEV-02、DEV-04、DEV-07 |
 | DEV-09 | [task9.md](task9.md) | Boss 业务控制台 | 项目/任务/员工/审批/通知/归档/模型配置等业务页面和 API | DEV-03、DEV-04、DEV-05、DEV-08 |
 | DEV-10 | [task10.md](task10.md) | 像素办公室、观测、评分和发布验收 | Office 投影、真实执行控制台、评分卡、备份恢复、AS-01～AS-18 最终汇总验收 | DEV-01～DEV-09、DEV-11 |
-| DEV-11 | [task11.md](task11.md) | Electron 桌面应用与跨平台打包 | Electron Main/Preload、React/Vite production、Python sidecar、安装/升级、Docker 降级、AS-18 | DEV-01；完整集成依赖 DEV-02、DEV-04、DEV-07、DEV-09 |
+| DEV-11 | [task11.md](task11.md) | Electron 桌面应用与跨平台打包 | Electron Main/Preload、React/Vite production、Node.js/TypeScript sidecar、安装/升级、Docker 降级、AS-18 | DEV-01；完整集成依赖 DEV-02、DEV-04、DEV-07、DEV-09 |
 
 ## 任务依赖关系
 

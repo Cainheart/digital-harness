@@ -140,7 +140,7 @@ DELETE /api/v1/settings/models/{domain}/credential
 
 ### 4.2 Model Adapter
 
-~~~python
+~~~typescript
 class ModelAdapter(Protocol):
     async def complete(
         self,
@@ -177,7 +177,7 @@ FrozenModelConfig 在 Attempt 创建时生成，包含 provider、modelName、co
 
 内部记录接口：
 
-~~~python
+~~~typescript
 class ModelCallRecorder(Protocol):
     async def started(self, call: ModelCallStart) -> CallHandle: ...
     async def finished(self, handle: CallHandle, result: ModelCallResult) -> None: ...
@@ -206,10 +206,10 @@ GET /api/v1/executions?projectId={id}&taskId={id}&traceId={id}
 
 - LiteLLM 或可替换 Model Adapter；
 - OpenAI/DeepSeek 适配；
-- Python asyncio、Pydantic；
-- OS Keychain/ keyring；
+- TypeScript Promise/Worker、TypeBox；
+- OS Keychain/TypeScript CredentialAdapter；
 - OpenTelemetry、结构化 JSON Log；
-- pytest、供应商模拟服务、脱敏扫描和成本计算测试。
+- Vitest、供应商模拟服务、脱敏扫描和成本计算测试。
 
 ## 6. 验收标准与验收方法
 
@@ -225,11 +225,13 @@ GET /api/v1/executions?projectId={id}&taskId={id}&traceId={id}
 | T5-AC-08 | 调用链路 | 完成一次模型调用 | 能从任务跳到模型调用，再返回任务，Token、成本、耗时和 trace 一致。 |
 | T5-AC-09 | 脱敏失败 | 让脱敏器返回失败 | 调用被阻止，敏感内容不写入下游 Artifact/日志。 |
 | T5-AC-10 | 成本聚合 | 执行多个领域/模型调用 | 按领域、模型、任务统计次数、耗时、错误、Token、成本和重试。 |
+| T5-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 5 在从最新 `master` 创建的 `dev/task-5` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 验收证据包括：配置版本、连接测试结果、调用记录、错误分类、脱敏扫描、Keychain 测试替身记录、成本聚合和双向跳转结果。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-5` 分支创建一次可识别的 Task 5 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 五领域模型配置和配置版本接口冻结。
 - Model Adapter 能返回结构化结果和统一错误，不直接推进业务状态。
 - task6.md 可用真实模型生成调研材料，task7.md 可用真实模型生成 Plan/Action，task9.md 可查询配置状态，task10.md 可聚合调用和成本。

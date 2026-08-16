@@ -1,0 +1,9 @@
+import { Database } from "../infra/database.js";
+import { redact } from "./redaction.js";
+
+/** 将运行和安全事件脱敏后写入持久化运行事件表。 */
+export class AuditWriter {
+  constructor(private readonly database: Database) {}
+  /** 序列化并脱敏事件元数据，再追加到数据库。 */
+  async write(input: { traceId: string; eventType: string; result: string; metadata?: Record<string, unknown> }): Promise<void> { const payload = redact(JSON.stringify({ result: input.result, metadata: input.metadata ?? {} })); this.database.appendEvent(input.eventType, input.traceId, payload); }
+}

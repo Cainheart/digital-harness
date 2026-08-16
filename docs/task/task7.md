@@ -144,7 +144,7 @@ tests/recovery/coding/
 
 ### 3.4 AgentHarness SPI
 
-~~~python
+~~~typescript
 class AgentHarness(Protocol):
     async def start(
         self,
@@ -322,9 +322,9 @@ npm run build
 
 ~~~text
 ruff check .
-pytest -q
-python -m compileall app
-alembic check
+npm test -- --run
+npm run typecheck
+npm run db:check
 ~~~
 
 实际命令只能来自版本化 VerificationProfile，不能由模型临时扩大权限。
@@ -397,7 +397,7 @@ POST /internal/v1/attempts/{attemptId}/cancelled
 
 ## 10. 开发实施方法
 
-1. 先定义 CodingTaskSpec、ExecutionGrant、Action、Observation、Checkpoint、VerificationRun 和 HandoffPackage 的 Pydantic Schema。
+1. 先定义 CodingTaskSpec、ExecutionGrant、Action、Observation、Checkpoint、VerificationRun 和 HandoffPackage 的 TypeBox Schema。
 2. 先写状态不变量、Grant 匹配、路径拒绝、命令拒绝、幂等 Patch 和暂停禁止新动作测试。
 3. 实现 Session/Lease/Checkpoint 和 EventStore/ArtifactStore 适配。
 4. 实现 Context Builder 和 Planner，使用固定测试仓库验证上下文范围不会读取整个仓库。
@@ -410,11 +410,11 @@ POST /internal/v1/attempts/{attemptId}/cancelled
 
 需要使用：
 
-- Python 3.12、FastAPI、Pydantic、asyncio；
+- Node.js 22 LTS、TypeScript、Fastify、TypeBox、Promise/Worker；
 - LiteLLM/Model Adapter；
 - Docker Engine/Docker Desktop；
 - 文件系统 SHA-256、临时副本、原子 rename；
-- pytest、Docker sandbox、资源限制测试、提示注入/路径逃逸样本；
+- Vitest、Docker sandbox、资源限制测试、提示注入/路径逃逸样本；
 - OpenTelemetry、Artifact Store、SQLite WAL。
 
 ## 11. 验收标准与验收方法
@@ -434,11 +434,13 @@ POST /internal/v1/attempts/{attemptId}/cancelled
 | T7-AC-11 | Review 交接 | 验证通过后请求 Review | Handoff 包含 diff、验证、风险、失败、回滚和 trace；不能自动批准。 |
 | T7-AC-12 | Worker 崩溃 | 在动作前后终止 Worker | 通过租约、事件序号、幂等键和工作区 SHA 判断安全恢复或阻塞。 |
 | T7-AC-13 | 额外变更 | 在工作区增加未说明文件 | Handoff 被阻塞并列出额外变更。 |
+| T7-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 7 在从最新 `master` 创建的 `dev/task-7` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 AS-17 必须完整执行：正常开发 1 次、Review 驳回 1 次、测试失败/NPI 修复 1 次、中断恢复 1 次。
 
 ## 12. 完成定义与交接
 
+- 开发结束时已在 `dev/task-7` 分支创建一次可识别的 Task 7 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 一个真实开发任务可以产生上下文、计划、增量 diff、真实验证、失败诊断/修复、交接包和 Review 请求。
 - 编码 Agent 不直接改变业务状态，不自行批准 Review，不关闭缺陷，不跳过测试放行。
 - 所有文件、命令、测试、模型调用、失败和恢复证据都可按任务、Attempt 和 traceId 查询。

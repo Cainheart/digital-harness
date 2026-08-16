@@ -182,7 +182,7 @@ POST /api/v1/messages/{messageId}/acknowledge
 
 ### 4.3 Policy Gate 接口
 
-~~~python
+~~~typescript
 class PolicyGate(Protocol):
     async def evaluate_plan(
         self,
@@ -231,10 +231,10 @@ Boss 的审批意见不能直接变成成员命令。接口应返回：
 
 需要使用：
 
-- Python/Pydantic Schema、SQLAlchemy；
+- TypeScript/TypeBox Schema、Drizzle ORM；
 - 结构化事件/消息；
 - Policy Gate 和确定性规则；
-- pytest、属性测试或表驱动测试；
+- Vitest、属性测试或表驱动测试；
 - OpenTelemetry traceId 和脱敏日志。
 
 ## 6. 验收标准与验收方法
@@ -250,11 +250,13 @@ Boss 的审批意见不能直接变成成员命令。接口应返回：
 | T3-AC-07 | 工具越权 | 测试角色调用写入工具，或开发角色访问 Keychain | 拒绝并写入脱敏安全事件。 |
 | T3-AC-08 | Boss 边界 | 查看 Boss 表单和方向意见转换结果 | Boss 不需要填写技术方案/成员任务；意见由组长转换为任务。 |
 | T3-AC-09 | 策略版本 | 修改角色策略后启动新 Attempt | 新 Attempt 使用新版本，旧 Attempt 仍保留旧版本和审计。 |
+| T3-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 3 在从最新 `master` 创建的 `dev/task-3` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 验收证据包括：岗位初始化数据、策略评估结果、拒绝原因、消息记录、角色/任务/工具关联和安全事件。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-3` 分支创建一次可识别的 Task 3 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 所有岗位定义通过完整性校验，组织查询和 office-view 可被前端消费。
 - 结构化消息、Policy Gate 和 Grant 字段已冻结。
 - 角色越权、对象越权、工具越权和 Boss 边界测试通过。

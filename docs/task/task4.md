@@ -191,7 +191,7 @@ POST /api/v1/approvals/{id}/decision
 
 ### 4.3 Workflow Coordinator 接口
 
-~~~python
+~~~typescript
 class WorkflowCoordinator(Protocol):
     async def advance(
         self,
@@ -230,10 +230,10 @@ release(attemptId, result) -> ScheduleDecision
 
 需要使用：
 
-- Python 3.12、FastAPI、Pydantic、SQLAlchemy；
+- Node.js 22 LTS、TypeScript、Fastify、TypeBox、Drizzle ORM；
 - LangGraph 或等价的固定流程运行时，但业务状态仍由显式状态机守卫；
 - SQLite 事务、Outbox、Worker Lease；
-- pytest、状态机表驱动测试、并发/幂等集成测试和 E2E 流程测试。
+- Vitest、状态机表驱动测试、并发/幂等集成测试和 E2E 流程测试。
 
 ## 6. 验收标准与验收方法
 
@@ -251,11 +251,13 @@ release(attemptId, result) -> ScheduleDecision
 | T4-AC-10 | 非法流转 | 直接把运行中改为已结项 | 返回 409 WORKFLOW_GUARD_BLOCKED，状态和事件不变。 |
 | T4-AC-11 | 幂等审批 | 重复提交相同审批命令 | 返回原审批结果，不生成重复审批或状态事件。 |
 | T4-AC-12 | 重启恢复 | 在运行中、等待 Boss、已暂停分别重启 | 状态、未完成任务和人工关卡保持，60 秒内可见。 |
+| T4-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 4 在从最新 `master` 创建的 `dev/task-4` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 必须保存流程事件序列、状态前后态、审批记录、通知、调度租约、暂停/恢复原因、终止确认和错误响应。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-4` 分支创建一次可识别的 Task 4 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 项目、任务、通知状态机与需求矩阵完全一致。
 - 四类 Boss 审批不可被 Worker、Harness 或自动流程代替。
 - 测试放行驳回路径已覆盖责任组长整改计划。

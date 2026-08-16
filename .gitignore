@@ -6,6 +6,8 @@ __pycache__/
 backend/*.egg-info/
 frontend/node_modules/
 frontend/dist/
+backend/node_modules/
+backend/dist/
 *.tsbuildinfo
 coverage/
 *.log

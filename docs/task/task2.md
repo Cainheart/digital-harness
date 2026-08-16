@@ -1,7 +1,7 @@
 # Task 2：核心业务对象、版本、领域事件与证据追踪
 
 > 任务编号：DEV-02
-> 任务状态：待开发
+> 任务状态：实现与自动化验收通过，提交待用户确认（2026-08-16）
 > 任务类型：领域模型、持久化、事件、证据和追踪链
 > 前置任务：task1.md
 > 后续消费者：task3.md、task4.md、task5.md、task6.md、task7.md、task8.md、task9.md、task10.md
@@ -40,22 +40,13 @@
 ### 3.1 建议代码目录
 
 ~~~text
-backend/app/domain/project/
-backend/app/domain/task/
-backend/app/domain/artifact/
-backend/app/domain/approval/
-backend/app/domain/review/
-backend/app/domain/testing/
-backend/app/domain/defect/
-backend/app/domain/execution/
-backend/app/domain/event/
-backend/app/domain/trace/
-backend/app/infra/repositories/
-backend/app/infra/artifacts/
-backend/app/infra/outbox/
-backend/app/api/queries/
-tests/unit/domain/
-tests/integration/persistence/
+backend/src/domain/
+backend/src/infra/repositories/
+backend/src/infra/artifacts.ts
+backend/src/infra/outbox.ts
+backend/src/api/
+backend/tests/unit/
+backend/tests/integration/
 ~~~
 
 ### 3.2 领域对象和最小字段
@@ -77,8 +68,9 @@ tests/integration/persistence/
 
 ### 3.3 Schema 和迁移
 
-- 使用 SQLAlchemy 2 定义关系和约束。
-- 使用 Alembic 管理版本。
+- 使用 Drizzle ORM/better-sqlite3 定义并访问关系和约束。
+- 使用 TypeScript migration journal 管理版本；迁移 SQL 由应用内 migration 模块执行。
+- 当前 Schema 基线为 `0003_task2_integrity_trace_fix`；该版本补充 Artifact 完整性状态、DomainEvent 上下文持久化字段，并修复 Artifact/Notification TraceLink trigger。
 - 所有业务对象必须有稳定 ID，推荐使用不可猜测的时间有序 ID。
 - 交付物内容、大型 stdout/stderr、diff 和网页快照不直接塞入业务表，保存到 Artifact Store 后在数据库保存引用和 SHA-256。
 - 事件表只追加，不允许更新历史事件正文。
@@ -131,39 +123,24 @@ PRD/验收标准
 
 ### 4.2 领域事件接口
 
-~~~python
-class EventStore(Protocol):
-    async def append(
-        self,
-        aggregate_type: str,
-        aggregate_id: str,
-        expected_version: int,
-        events: Sequence[DomainEventDraft],
-    ) -> AppendResult: ...
-
-    async def list_after(
-        self,
-        event_id: str | None,
-        project_id: str | None = None,
-    ) -> list[DomainEvent]: ...
+~~~typescript
+interface EventStore {
+  append(aggregateType: string, aggregateId: string, expectedVersion: number, events: DomainEventDraft[]): Promise<AppendResult>;
+  listAfter(eventId: string | null, projectId?: string | null): Promise<DomainEvent[]>;
+}
 ~~~
 
 每个事件必须能够定位到业务对象；安全事件和调用事件额外携带 attemptId、actor、拒绝原因和脱敏原因。
 
 ### 4.3 Artifact Store 接口
 
-~~~python
-class ArtifactStore(Protocol):
-    async def put(
-        self,
-        content: bytes,
-        media_type: str,
-        metadata: ArtifactMetadata,
-    ) -> ArtifactRef: ...
-
-    async def get(self, ref: ArtifactRef) -> ArtifactContent: ...
-    async def verify(self, ref: ArtifactRef) -> VerificationResult: ...
-    async def delete_for_project(self, project_id: str) -> DeleteReport: ...
+~~~typescript
+interface ArtifactStore {
+  put(content: Buffer, mediaType: string, metadata: ArtifactMetadata): Promise<ArtifactRef>;
+  get(ref: ArtifactRef): Promise<Buffer>;
+  verify(ref: ArtifactRef): Promise<VerificationResult>;
+  deleteForProject(projectId: string): Promise<DeleteReport>;
+}
 ~~~
 
 ArtifactRef 至少包含 artifactId、sha256、mediaType、size、createdAt 和存储相对路径。删除时必须遵守历史删除和备份保管规则。
@@ -183,7 +160,7 @@ GET /api/v1/events?after={eventId}
 ## 5. 开发实施方法
 
 1. 先画出核心关系图和对象生命周期，固定主键、版本字段、外键和删除策略。
-2. 先写对象 Schema、非法字段测试、版本冲突测试和事件追加测试，再写 SQLAlchemy/Alembic 实现。
+2. 先写 TypeBox/领域对象 Schema、非法字段测试、版本冲突测试和事件追加测试，再写 Drizzle/SQLite 实现。
 3. 实现事务边界：业务状态、领域事件、Outbox 和版本号必须在同一事务中提交。
 4. 实现 Artifact Store 的内容寻址、SHA-256、大小限制、元数据校验和引用删除。
 5. 实现 TraceLink 和覆盖率查询，先用代表性项目的人工数据验证双向导航。
@@ -192,10 +169,10 @@ GET /api/v1/events?after={eventId}
 
 需要使用：
 
-- Python 3.12、Pydantic v2、SQLAlchemy 2、Alembic、SQLite WAL；
+- Node.js 22 LTS、TypeScript、TypeBox、Drizzle ORM、better-sqlite3、SQLite WAL；
 - 本地文件 Artifact Store 和 SHA-256；
 - OpenTelemetry/结构化 JSON Log 的链路字段；
-- pytest、事务回滚测试、临时目录、数据迁移测试。
+- Vitest、事务回滚测试、临时目录、数据迁移测试。
 
 ## 6. 验收标准与验收方法
 
@@ -211,11 +188,13 @@ GET /api/v1/events?after={eventId}
 | T2-AC-08 | 追踪链 | 从验收标准查询到任务、用例、测试、缺陷和证据 | 代表性项目关键对象断链数为 0，支持前后双向导航。 |
 | T2-AC-09 | 重启恢复 | 写入项目/任务/事件后重启数据库和应用 | 已提交数据、版本和事件链全部保留。 |
 | T2-AC-10 | 删除边界 | 删除历史项目并检查业务库、Artifact、Trace 和审计 | 业务内容按规则删除，最小删除审计保留，备份按保管策略处理。 |
+| T2-AC-COMMIT | 分支、验收与开发完成提交 | Task 开发、测试和文档完成后检查 `git branch --show-current`、`git log`、提交哈希和工作区状态 | Task 2 在从最新 `master` 创建的 `dev/task-2` 分支上完成；已创建完成提交，提交哈希已写入验收证据；验收和 Review 成功后才合并到 `master`，并记录合并提交哈希。 |
 
 证据包括：迁移日志、数据库查询、事件序列、Artifact 清单、SHA 校验、幂等响应、版本冲突响应和追踪链报告。
 
 ## 7. 完成定义与交接
 
+- 开发结束时已在 `dev/task-2` 分支创建一次可识别的 Task 2 完成提交，提交哈希已记录在验收证据中，相关工作区无未提交变更；验收和 Review 成功后才允许合并到 `master`，并记录合并提交哈希。
 - 对象 Schema、迁移和仓储接口已冻结，后续任务不能私自新增同义对象。
 - 事务、事件、Outbox、Artifact 和 TraceLink 有集成测试。
 - task3.md 可以使用项目/任务/角色/消息对象，task4.md 可以使用状态和事件，task7.md 可以保存 Attempt/Observation/Checkpoint，task9.md/task10.md 可以查询读模型。
