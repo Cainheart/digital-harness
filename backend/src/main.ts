@@ -24,6 +24,7 @@ import { ApplicationLifecycle } from "./lifecycle/service.js";
 import { WorkerLeaseStore } from "./lifecycle/worker-lease.js";
 import { FileArtifactStore } from "./infra/artifacts.js";
 import { TraceContext } from "./observability/trace.js";
+import { registerTask3Routes } from "./api/task3.js";
 
 declare module "fastify" { interface FastifyInstance { runtime: RuntimeState; } }
 export type RuntimeState = { settings: Settings; database: Database; persistenceRoot: PersistenceRoot; credentials: CredentialAdapter; readiness: ReadinessService; startupGate: StartupGate; audit: AuditWriter; lifecycle: ApplicationLifecycle; leases: WorkerLeaseStore; artifactStore: FileArtifactStore; traceContextFactory: () => TraceContext; schemaInitializationError: Record<string, unknown> | null; testMode: boolean };
@@ -39,6 +40,7 @@ export function createApp(options: { persistentRoot: string; testMode?: boolean;
   app.addHook("onClose", async () => { if (!database.connection.open) return; try { if (!runtime.schemaInitializationError && database.currentRevision() !== null) runtime.lifecycle.stopSync(); } finally { database.close(); } });
   app.get("/api/v1/readiness", { schema: { response: { 200: Type.Any() } } }, async (request) => { const traceId = `tr_readiness_${Date.now().toString(36)}`; assertLocalRequest(request, testMode, traceId); return runtime.readiness.check(traceId); });
   registerEventRoutes(app, { store: new SqliteEventStore(), testMode });
+  registerTask3Routes(app, { testMode });
   return app;
 }
 

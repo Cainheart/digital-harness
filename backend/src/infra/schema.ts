@@ -1,4 +1,5 @@
 import type BetterSqlite3 from "better-sqlite3";
+import { INITIAL_ORGANIZATION } from "../domain/organization/definitions.js";
 
 /** 与 PRD/概要设计冻结的项目状态值。 */
 export const PROJECT_STATUSES = ["准备中", "运行中", "等待 Boss", "已暂停", "已阻塞", "结项中", "已结项", "已终止"] as const;
@@ -9,6 +10,10 @@ export const PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 export const TASK2_TABLE_ORDER = ["projects", "tasks", "task_dependencies", "artifacts", "artifact_versions", "approvals", "reviews", "test_cases", "test_runs", "defects", "execution_attempts", "model_calls", "tool_calls", "domain_events", "notifications", "outbox_messages", "idempotency_records", "trace_links", "project_deletion_audits"] as const;
 export const TASK1_TABLES = ["credential_configs", "runtime_events", "runtime_state", "worker_leases"] as const;
 export const TASK2_TABLES = new Set<string>(TASK2_TABLE_ORDER);
+/** Task 3 组织、结构化消息和策略审计表；后续 Task 4～Task 8 只通过这些稳定对象消费权限。 */
+export const TASK3_TABLE_ORDER = ["organization_domains", "role_definitions", "organization_members", "structured_messages", "policy_decisions"] as const;
+/** 用于启动完整性检查的 Task 3 表集合。 */
+export const TASK3_TABLES = new Set<string>(TASK3_TABLE_ORDER);
 export const PROJECT_SCOPED_TABLE_NAMES = ["tasks", "task_dependencies", "artifacts", "artifact_versions", "approvals", "reviews", "test_cases", "test_runs", "defects", "execution_attempts", "model_calls", "tool_calls", "notifications", "domain_events", "outbox_messages", "idempotency_records", "trace_links"] as const;
 export const PROJECT_ID_INDEX_NAMES = Object.fromEntries([...PROJECT_SCOPED_TABLE_NAMES, "project_deletion_audits"].map((name) => [name, `ix_${name}_project_id`])) as Record<string, string>;
 
@@ -111,4 +116,55 @@ export function migrate0003(db: BetterSqlite3.Database): void {
   db.exec(renderTraceLinkTrigger("trg_trace_links_project_scope_insert", "INSERT"));
   db.exec(renderTraceLinkTrigger("trg_trace_links_project_scope_update", "UPDATE"));
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run("0003_task2_integrity_trace_fix");
+}
+
+/**
+ * 修改日期：2026-08-16
+ * 修改原因：Task 3 需要把组织、岗位版本、结构化消息和策略判断纳入同一持久化边界，避免角色权限只存在内存中而无法审计或恢复。
+ * 创建 Task 3 的增量 Schema migration。
+ */
+export function migrate0004(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS organization_domains (
+      domain_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, office_zone TEXT NOT NULL, group_name TEXT NOT NULL,
+      responsibilities_json TEXT NOT NULL CHECK (json_valid(responsibilities_json) = 1), version INTEGER NOT NULL CHECK (version >= 1), enabled INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS role_definitions (
+      role_id TEXT PRIMARY KEY, domain_id TEXT NOT NULL REFERENCES organization_domains(domain_id), title TEXT NOT NULL, objective TEXT NOT NULL,
+      responsibilities_json TEXT NOT NULL CHECK (json_valid(responsibilities_json) = 1), inputs_json TEXT NOT NULL CHECK (json_valid(inputs_json) = 1), outputs_json TEXT NOT NULL CHECK (json_valid(outputs_json) = 1),
+      allowed_tools_json TEXT NOT NULL CHECK (json_valid(allowed_tools_json) = 1), visible_objects_json TEXT NOT NULL CHECK (json_valid(visible_objects_json) = 1), allowed_objects_json TEXT NOT NULL CHECK (json_valid(allowed_objects_json) = 1), forbidden_actions_json TEXT NOT NULL CHECK (json_valid(forbidden_actions_json) = 1),
+      object_actions_json TEXT NOT NULL CHECK (json_valid(object_actions_json) = 1), path_policy_json TEXT NOT NULL CHECK (json_valid(path_policy_json) = 1), command_policy_json TEXT NOT NULL CHECK (json_valid(command_policy_json) = 1), role_version INTEGER NOT NULL CHECK (role_version >= 1), enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS organization_members (
+      instance_id TEXT PRIMARY KEY, role_id TEXT NOT NULL REFERENCES role_definitions(role_id), display_name TEXT NOT NULL, specialist_tag TEXT NOT NULL, office_zone TEXT NOT NULL, desk_group TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('available','busy','blocked')), role_version INTEGER NOT NULL CHECK (role_version >= 1), created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS structured_messages (
+      message_id TEXT PRIMARY KEY, sender_role TEXT NOT NULL, sender_instance_id TEXT NOT NULL, receiver_role TEXT NOT NULL, receiver_instance_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id), task_id TEXT NOT NULL, message_type TEXT NOT NULL CHECK (message_type IN ('task_assignment','feasibility_opinion','approval_direction','review_feedback','defect_handoff','regression_request','risk_escalation','coordination_item')),
+      payload_json TEXT NOT NULL CHECK (json_valid(payload_json) = 1), created_at TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('pending','acknowledged','handled','rejected')), handled_at TEXT, handled_by TEXT,
+      source_object_type TEXT, source_object_id TEXT, response_object_type TEXT, response_object_id TEXT, trace_id TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1), request_hash TEXT NOT NULL,
+      FOREIGN KEY(project_id,task_id) REFERENCES tasks(project_id,id)
+    );
+    CREATE TABLE IF NOT EXISTS policy_decisions (
+      decision_id TEXT PRIMARY KEY, project_id TEXT, task_id TEXT, attempt_id TEXT, role_id TEXT NOT NULL, role_version INTEGER NOT NULL CHECK (role_version >= 1), action_kind TEXT NOT NULL, object_type TEXT, object_id TEXT, tool_name TEXT,
+      decision TEXT NOT NULL CHECK (decision IN ('allow','reject','approval_required')), reason TEXT NOT NULL, risk_level TEXT NOT NULL CHECK (risk_level IN ('low','medium','high','critical')), trace_id TEXT NOT NULL, action_json TEXT NOT NULL CHECK (json_valid(action_json) = 1), created_at TEXT NOT NULL
+    );
+  `);
+  const attemptColumns = db.prepare("PRAGMA table_info(execution_attempts)").all() as { name: string }[];
+  if (!attemptColumns.some((column) => column.name === "role_version")) db.exec("ALTER TABLE execution_attempts ADD COLUMN role_version INTEGER NOT NULL DEFAULT 1 CHECK (role_version >= 1)");
+  if (!attemptColumns.some((column) => column.name === "policy_snapshot_json")) db.exec("ALTER TABLE execution_attempts ADD COLUMN policy_snapshot_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(policy_snapshot_json) = 1)");
+  for (const [table, index] of [["structured_messages", "ix_structured_messages_project_task"], ["policy_decisions", "ix_policy_decisions_project_task"], ["organization_members", "ix_organization_members_role"]] as const) db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${table === "structured_messages" ? "project_id,task_id" : table === "policy_decisions" ? "project_id,task_id" : "role_id"})`);
+  seedOrganization(db);
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run("0004_task3_organization_policy");
+}
+
+/** 将版本化初始化组织写入数据库；INSERT OR IGNORE 保留用户后续调整的岗位版本。 */
+function seedOrganization(db: BetterSqlite3.Database): void {
+  const now = new Date().toISOString();
+  const insertDomain = db.prepare("INSERT OR IGNORE INTO organization_domains (domain_id,display_name,office_zone,group_name,responsibilities_json,version,enabled) VALUES (?,?,?,?,?,?,1)");
+  for (const domain of INITIAL_ORGANIZATION.domains) insertDomain.run(domain.domainId, domain.displayName, domain.officeZone, domain.groupName, JSON.stringify(domain.responsibilities), domain.version);
+  const insertRole = db.prepare("INSERT OR IGNORE INTO role_definitions (role_id,domain_id,title,objective,responsibilities_json,inputs_json,outputs_json,allowed_tools_json,visible_objects_json,allowed_objects_json,forbidden_actions_json,object_actions_json,path_policy_json,command_policy_json,role_version,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  for (const role of INITIAL_ORGANIZATION.roles) insertRole.run(role.roleId, role.domain, role.title, role.objective, JSON.stringify(role.responsibilities), JSON.stringify(role.inputs), JSON.stringify(role.outputs), JSON.stringify(role.allowedTools), JSON.stringify(role.visibleObjects), JSON.stringify(role.allowedObjects), JSON.stringify(role.forbiddenActions), JSON.stringify(role.objectActions), JSON.stringify(role.pathPolicy), JSON.stringify(role.commandPolicy), role.roleVersion, role.enabled ? 1 : 0, now, now);
+  const insertMember = db.prepare("INSERT OR IGNORE INTO organization_members (instance_id,role_id,display_name,specialist_tag,office_zone,desk_group,status,role_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)");
+  for (const member of INITIAL_ORGANIZATION.members) insertMember.run(member.instanceId, member.roleId, member.displayName, member.specialistTag, member.officeZone, member.deskGroup, member.status, member.roleVersion, now);
 }

@@ -13,7 +13,7 @@ Digital Harness 是一个本地运行的 AI 数字研发 Harness 工程，目标
 
 - 运行时统一采用 Node.js 22 + TypeScript + Fastify。
 - SQLite 由 `better-sqlite3` 负责连接，Drizzle ORM 负责 TypeScript 数据访问边界；迁移日志使用 `drizzle_migrations`。
-- 当前持久化 Schema 基线为 `0003_task2_integrity_trace_fix`，支持从 `0001_runtime_skeleton` 和 `0002_task2_domain_foundation` 按批准路径升级。
+- 当前持久化 Schema 基线为 `0004_task3_organization_policy`，支持从 `0001_runtime_skeleton`、`0002_task2_domain_foundation` 和 `0003_task2_integrity_trace_fix` 按批准路径升级。
 - 后端源码位于 `backend/src/`，构建产物输出到 `backend/dist/`，运行时实现统一为 TypeScript。
 - Artifact Store、Outbox、幂等、TraceLink、持久化根目录、Keychain 适配器和 readiness/SSE 控制面已经迁移为 TypeScript。
 

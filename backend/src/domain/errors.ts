@@ -65,3 +65,9 @@ export class ArtifactTooLargeError extends Task2DomainError { constructor(messag
 export class TraceLinkInvalidError extends Task2DomainError { constructor(message = "TraceLink 关系无效", options?: DomainErrorOptions) { super(message, options, { code: "TRACE_LINK_INVALID", statusCode: 422 }); } }
 /** 使用固定错误码表示质量门禁缺少证据。 */
 export class EvidenceIncompleteError extends Task2DomainError { constructor(message = "证据不完整，无法通过质量门禁", options?: DomainErrorOptions) { super(message, options, { code: "EVIDENCE_INCOMPLETE", statusCode: 422 }); } }
+/** 使用固定错误码表示结构化消息缺少业务必需字段或引用无效。 */
+export class InvalidMessageError extends Task2DomainError { constructor(message = "结构化消息无效", options?: DomainErrorOptions) { super(message, options, { code: "INVALID_MESSAGE", statusCode: 422 }); } }
+/** 使用固定错误码表示岗位定义不完整，不能被启用或领取任务。 */
+export class InvalidRoleDefinitionError extends Task2DomainError { constructor(message = "岗位定义不完整，不能启用", options?: DomainErrorOptions) { super(message, options, { code: "INVALID_ROLE_DEFINITION", statusCode: 422 }); } }
+/** 使用固定错误码表示角色、对象、工具或路径策略拒绝了动作。 */
+export class PolicyDeniedError extends Task2DomainError { constructor(message = "策略拒绝了当前动作", options?: DomainErrorOptions) { super(message, options, { code: "POLICY_DENIED", statusCode: 403 }); } }

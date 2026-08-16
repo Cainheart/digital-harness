@@ -13,4 +13,4 @@ export function ensureProjectWritable(connection: BetterSqlite3.Database, projec
 /** 保证项目子对象的复合项目边界。 */
 export function ensureProjectChild(connection: BetterSqlite3.Database, table: string, projectId: string, id: string, idColumn = "id"): void { if (!connection.prepare(`SELECT 1 FROM ${table} WHERE project_id=? AND ${idColumn}=?`).get(projectId, id)) throw new NotFoundError("项目范围对象不存在"); }
 /** 根据游标和 limit 构造稳定分页结果。 */
-export function page<T extends { id?: string; eventId?: string }>(items: T[], limit: number): Page<T> { const hasMore = items.length > limit; const visible = hasMore ? items.slice(0, limit) : items; const last = visible.at(-1); return { items: visible, nextCursor: hasMore && last ? String(last.id ?? last.eventId) : null, hasMore }; }
+export function page<T>(items: T[], limit: number): Page<T> { const hasMore = items.length > limit; const visible = hasMore ? items.slice(0, limit) : items; const last = visible.at(-1) as ({ id?: string; eventId?: string; messageId?: string } | undefined); return { items: visible, nextCursor: hasMore && last ? String(last.id ?? last.eventId ?? last.messageId) : null, hasMore }; }
