@@ -2,7 +2,7 @@
 
 > 任务：DEV-03；当前分支：`dev/task-3`；基线：`0004_task3_organization_policy`
 > 
-> 完成提交哈希将在完成提交后回填；本分支未合并到 `master`，等待验收和 Review。
+> 完成提交哈希：`7aa3c6a`（`feat(task-3): complete organization policy and message foundation`）；本分支未合并到 `master`，等待验收和 Review。
 
 ## 实现范围
 
@@ -53,6 +53,6 @@ npm test
 ## 分支交付
 
 - 开发分支：`dev/task-3`。
-- 完成提交：待创建后回填哈希。
+- 完成提交：`7aa3c6a`。
 - Review：待验收方执行。
 - 合并到 `master`：验收和 Review 通过后再执行；当前未合并。
