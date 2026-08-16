@@ -40,6 +40,18 @@ import { registerPolicyRoutes } from "./api/policy-routes.js";
 import { createRequestTraceId } from "./api/request-trace.js";
 import { DomainError } from "./domain/errors.js";
 import { registerWorkflowRoutes } from "./api/workflow-routes.js";
+import { registerModelSettingsRoutes } from "./api/model-settings-routes.js";
+import { registerExecutionRoutes } from "./api/execution-routes.js";
+import { ModelSettingsService } from "./application/model-settings.js";
+import {
+  DeepSeekAdapter,
+  OpenAiAdapter,
+} from "./gateway/model/index.js";
+import {
+  ModelAdapterRegistry,
+  ModelGateway,
+} from "./gateway/model/gateway.js";
+import { SqliteModelCallRecorder } from "./observability/model-call-recorder.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -58,6 +70,9 @@ export type RuntimeState = {
   leases: WorkerLeaseStore;
   artifactStore: FileArtifactStore;
   traceContextFactory: () => TraceContext;
+  modelCallRecorder: SqliteModelCallRecorder;
+  modelGateway: ModelGateway;
+  modelSettings: ModelSettingsService;
   schemaInitializationError: Record<string, unknown> | null;
   testMode: boolean;
 };
@@ -91,6 +106,19 @@ export function createApp(options: {
   const credentials = testMode
     ? new MemoryCredentialAdapter()
     : new SystemCredentialAdapter();
+  const modelCallRecorder = new SqliteModelCallRecorder(database);
+  const modelGateway = new ModelGateway(
+    new ModelAdapterRegistry([
+      new OpenAiAdapter(credentials),
+      new DeepSeekAdapter(credentials),
+    ]),
+    modelCallRecorder,
+  );
+  const modelSettings = new ModelSettingsService(
+    database,
+    credentials,
+    modelGateway,
+  );
   const secretRef = testMode
     ? "memory://unconfigured"
     : settings.modelSecretRef;
@@ -100,6 +128,7 @@ export function createApp(options: {
       settings.modelProvider,
       settings.modelName,
       secretRef,
+      database,
     ),
     new ResearchReadinessChecker(
       testMode
@@ -130,6 +159,9 @@ export function createApp(options: {
     leases,
     artifactStore,
     traceContextFactory: TraceContext.new,
+    modelCallRecorder,
+    modelGateway,
+    modelSettings,
     schemaInitializationError,
     testMode,
   };
@@ -204,6 +236,8 @@ export function createApp(options: {
   registerMessageRoutes(app, { testMode });
   registerPolicyRoutes(app, { testMode });
   registerWorkflowRoutes(app, { testMode });
+  registerModelSettingsRoutes(app, { testMode });
+  registerExecutionRoutes(app, { testMode });
   return app;
 }
 

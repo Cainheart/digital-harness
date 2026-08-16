@@ -1,5 +1,8 @@
 import type BetterSqlite3 from "better-sqlite3";
-import { INITIAL_ORGANIZATION } from "../domain/organization/definitions.js";
+import {
+  INITIAL_ORGANIZATION,
+  ORGANIZATION_DOMAIN_IDS,
+} from "../domain/organization/definitions.js";
 
 /** 与 PRD/概要设计冻结的项目状态值。 */
 export const PROJECT_STATUSES = [
@@ -58,6 +61,17 @@ export const RUNTIME_TABLES = [
   "runtime_events",
   "runtime_state",
   "worker_leases",
+] as const;
+/** Task 5 模型配置和配置变更审计表。 */
+export const MODEL_GATEWAY_TABLES = [
+  "model_configs",
+  "model_config_changes",
+] as const;
+/** Task 5 模型调用字段和查询索引的固定合同。 */
+export const MODEL_GATEWAY_INDEX_DEFINITIONS = [
+  ["model_config_changes", "ix_model_config_changes_domain_created", "domain,created_at"],
+  ["model_calls", "ix_model_calls_domain_model", "domain,model"],
+  ["model_calls", "ix_model_calls_trace_id", "trace_id"],
 ] as const;
 /** 业务事实表的快速存在性查询集合。 */
 export const DOMAIN_TABLES = new Set<string>(DOMAIN_TABLE_ORDER);
@@ -585,6 +599,107 @@ export function migrateWorkflowHardeningSchema(
     db.exec("ALTER TABLE workflow_risks ADD COLUMN response_task_id TEXT");
   db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
     "0006_task4_workflow_hardening",
+  );
+}
+
+/**
+ * 创建五领域模型配置、配置变更审计并补齐模型调用观测字段。
+ * 修改日期：2026-08-16。
+ * 修改原因：Task 5 要求配置版本、凭据引用、模型调用生命周期和脱敏摘要具备可恢复的持久化合同。
+ */
+export function migrateModelGatewaySchema(
+  db: BetterSqlite3.Database,
+): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_configs (
+      domain TEXT PRIMARY KEY CHECK (domain IN (${ORGANIZATION_DOMAIN_IDS.map((domain) => `'${domain}'`).join(",")})),
+      provider TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      config_version INTEGER NOT NULL CHECK (config_version >= 0),
+      secret_ref TEXT,
+      credential_status TEXT NOT NULL CHECK (credential_status IN ('configured','missing')),
+      connection_status TEXT NOT NULL CHECK (connection_status IN ('unknown','ready','unavailable','blocked')),
+      last_error_code TEXT,
+      last_error_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS model_config_changes (
+      id TEXT PRIMARY KEY,
+      domain TEXT NOT NULL CHECK (domain IN (${ORGANIZATION_DOMAIN_IDS.map((domain) => `'${domain}'`).join(",")})),
+      previous_config_json TEXT NOT NULL CHECK (json_valid(previous_config_json) = 1),
+      next_config_json TEXT NOT NULL CHECK (json_valid(next_config_json) = 1),
+      expected_config_version INTEGER NOT NULL CHECK (expected_config_version >= 0),
+      idempotency_key TEXT NOT NULL UNIQUE,
+      request_hash TEXT NOT NULL,
+      trace_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  for (const definition of [
+    "model_domain TEXT",
+    "model_provider TEXT",
+    "model_name TEXT",
+    "model_secret_ref TEXT",
+    "model_timeout_ms INTEGER",
+    "model_retry_max_attempts INTEGER",
+  ]) {
+    const name = definition.split(" ", 1)[0];
+    const columns = db.prepare("PRAGMA table_info(execution_attempts)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE execution_attempts ADD COLUMN ${definition}`);
+    }
+  }
+  for (const definition of [
+    "domain TEXT NOT NULL DEFAULT 'product'",
+    "config_version TEXT NOT NULL DEFAULT '0'",
+    "span_id TEXT NOT NULL DEFAULT ''",
+    "input_summary TEXT NOT NULL DEFAULT ''",
+    "output_summary TEXT NOT NULL DEFAULT ''",
+    "timeout_ms INTEGER",
+    "timed_out INTEGER NOT NULL DEFAULT 0",
+    "retry_count INTEGER NOT NULL DEFAULT 0",
+    "artifact_ref TEXT",
+    "redaction_status TEXT NOT NULL DEFAULT 'passed'",
+    "final_status TEXT NOT NULL DEFAULT 'started'",
+    "total_tokens INTEGER",
+  ]) {
+    const name = definition.split(" ", 1)[0];
+    const columns = db.prepare("PRAGMA table_info(model_calls)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE model_calls ADD COLUMN ${definition}`);
+    }
+  }
+  const changeColumns = db.prepare("PRAGMA table_info(model_config_changes)").all() as {
+    name: string;
+  }[];
+  if (!changeColumns.some((column) => column.name === "request_hash")) {
+    db.exec("ALTER TABLE model_config_changes ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''");
+  }
+  for (const domain of ORGANIZATION_DOMAIN_IDS) {
+    db.prepare(
+      "INSERT OR IGNORE INTO model_configs (domain,provider,model_name,config_version,secret_ref,credential_status,connection_status,last_error_code,last_error_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      domain,
+      "unconfigured",
+      "unconfigured",
+      0,
+      null,
+      "missing",
+      "blocked",
+      "CREDENTIAL_UNAVAILABLE",
+      null,
+      new Date().toISOString(),
+    );
+  }
+  for (const [table, index, columns] of MODEL_GATEWAY_INDEX_DEFINITIONS) {
+    db.exec(`CREATE INDEX IF NOT EXISTS ${index} ON ${table} (${columns})`);
+  }
+  db.prepare("UPDATE drizzle_migrations SET version_num = ?").run(
+    "0007_task5_model_gateway",
   );
 }
 

@@ -15,6 +15,13 @@ export class TraceContext {
       `sp_${randomUUID().replaceAll("-", "")}`,
     );
   }
+  /** 从请求 traceId 创建嵌套 span，保持 HTTP、配置事件和调用记录同一链路。 */
+  static fromTraceId(traceId: string): TraceContext {
+    return new TraceContext(
+      traceId,
+      `sp_${randomUUID().replaceAll("-", "")}`,
+    );
+  }
   /** 创建继承当前 trace 且以当前 span 为父级的新 span。 */
   child(): TraceContext {
     return new TraceContext(

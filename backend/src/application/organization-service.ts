@@ -262,6 +262,23 @@ export class OrganizationService {
         throw new InvalidArgumentError(
           "Attempt ID 已存在，不能覆盖历史执行授权",
         );
+      // 修改日期：2026-08-16
+      // 修改原因：Task 5 要求 Attempt 创建时复制领域、供应商、模型和凭据引用，运行中的 Attempt 不受后续设置变更影响。
+      const modelConfigVersion = Number(input.modelConfigVersion);
+      const frozenModel = Number.isSafeInteger(modelConfigVersion)
+        ? (connection
+            .prepare(
+              "SELECT domain,provider,model_name,secret_ref FROM model_configs WHERE domain=? AND config_version=? AND credential_status='configured'",
+            )
+            .get(role.domain, modelConfigVersion) as
+            | {
+                domain: string;
+                provider: string;
+                model_name: string;
+                secret_ref: string;
+              }
+            | undefined)
+        : undefined;
       const grant = this.policyGate.createGrant({
         projectId: input.projectId,
         taskId: input.taskId,
@@ -275,7 +292,7 @@ export class OrganizationService {
       });
       connection
         .prepare(
-          "INSERT INTO execution_attempts (id,project_id,task_id,role,role_version,policy_snapshot_json,model_config_version,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO execution_attempts (id,project_id,task_id,role,role_version,policy_snapshot_json,model_config_version,model_domain,model_provider,model_name,model_secret_ref,model_timeout_ms,model_retry_max_attempts,workspace_ref,worker_lease_id,status,started_at,ended_at,retry_of_attempt_id,retry_count,trace_id,version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           input.attemptId,
@@ -292,6 +309,12 @@ export class OrganizationService {
             commandPolicy: role.commandPolicy,
           }),
           input.modelConfigVersion,
+          frozenModel?.domain ?? null,
+          frozenModel?.provider ?? null,
+          frozenModel?.model_name ?? null,
+          frozenModel?.secret_ref ?? null,
+          frozenModel ? 30_000 : null,
+          frozenModel ? 2 : null,
           input.workspaceRoot,
           null,
           "created",

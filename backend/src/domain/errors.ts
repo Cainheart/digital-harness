@@ -204,3 +204,15 @@ export class WorkflowGuardBlockedError extends DomainError {
     });
   }
 }
+
+/** 使用固定错误码表示模型凭据缺失或模型配置未完成。 */
+export class ModelConfigurationBlockedError extends DomainError {
+  constructor(message = "模型配置不可用，任务保持阻塞", options?: DomainErrorOptions) {
+    super(message, options, {
+      code: "MODEL_CONFIGURATION_BLOCKED",
+      statusCode: 409,
+      impact: "受影响的模型任务不会启动，已保存业务数据保留",
+      nextAction: "配置或重新绑定对应领域的模型凭据后执行连接检测",
+    });
+  }
+}

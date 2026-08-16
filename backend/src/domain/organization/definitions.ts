@@ -8,6 +8,14 @@ export type OrganizationDomainId =
   | "npi"
   | "testing"
   | "project_management";
+/** 五类责任领域的单一稳定标识来源，模型配置和组织岗位共用。 */
+export const ORGANIZATION_DOMAIN_IDS = [
+  "product",
+  "development",
+  "npi",
+  "testing",
+  "project_management",
+] as const satisfies readonly OrganizationDomainId[];
 /** 岗位允许执行的工具名称；工具策略只保存能力名，不保存凭据或参数。 */
 export type ToolName =
   | "research.search"
@@ -78,13 +86,7 @@ export type OrganizationSeed = {
 };
 
 /** 组织配置允许的领域集合，岗位加载和策略判断共用此单一事实来源。 */
-const VALID_DOMAINS = new Set<OrganizationDomainId>([
-  "product",
-  "development",
-  "npi",
-  "testing",
-  "project_management",
-]);
+const VALID_DOMAINS = new Set<OrganizationDomainId>(ORGANIZATION_DOMAIN_IDS);
 
 /** 组织配置允许的工具集合，未知工具默认不能被岗位声明。 */
 const VALID_TOOLS = new Set<ToolName>([

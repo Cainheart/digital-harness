@@ -26,11 +26,14 @@ import {
   migrateOrganizationSchema,
   migrateRuntimeSchema,
   migrateWorkflowHardeningSchema,
+  migrateModelGatewaySchema,
   ORGANIZATION_INDEX_DEFINITIONS,
   WORKFLOW_INDEX_DEFINITIONS,
   WORKFLOW_REQUIRED_INDEX_NAMES,
   ORGANIZATION_TABLES,
   WORKFLOW_TABLES,
+  MODEL_GATEWAY_TABLES,
+  MODEL_GATEWAY_INDEX_DEFINITIONS,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
@@ -179,6 +182,7 @@ export class Database {
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -204,6 +208,7 @@ export class Database {
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -228,6 +233,7 @@ export class Database {
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -251,6 +257,7 @@ export class Database {
         migrateOrganizationSchema(this.connection);
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
       } else if (current === "0004_task3_organization_policy") {
         const callback =
           backupCallback ??
@@ -273,6 +280,7 @@ export class Database {
           );
         migrateWorkflowSchema(this.connection);
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
       } else if (current === "0005_task4_workflow") {
         const callback =
           backupCallback ??
@@ -294,12 +302,34 @@ export class Database {
             "修复迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateWorkflowHardeningSchema(this.connection);
+        migrateModelGatewaySchema(this.connection);
+      } else if (current === "0006_task4_workflow_hardening") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateModelGatewaySchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0006_task4_workflow_hardening",
+          "备份持久化根目录并沿批准路径升级到 0007_task5_model_gateway",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -612,6 +642,7 @@ export class Database {
       ...DOMAIN_TABLES,
       ...ORGANIZATION_TABLES,
       ...WORKFLOW_TABLES,
+      ...MODEL_GATEWAY_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -621,6 +652,29 @@ export class Database {
         "SCHEMA_INTEGRITY_CONFLICT",
       );
     const requiredColumns: Record<string, string[]> = {
+      model_configs: [
+        "domain",
+        "provider",
+        "model_name",
+        "config_version",
+        "secret_ref",
+        "credential_status",
+        "connection_status",
+        "last_error_code",
+        "last_error_at",
+        "updated_at",
+      ],
+      model_config_changes: [
+        "id",
+        "domain",
+        "previous_config_json",
+        "next_config_json",
+        "expected_config_version",
+        "idempotency_key",
+        "request_hash",
+        "trace_id",
+        "created_at",
+      ],
       organization_domains: [
         "domain_id",
         "display_name",
@@ -790,6 +844,17 @@ export class Database {
         "恢复 Task 3 五类领域、19 个岗位和 19 个员工实例后重试",
         "SCHEMA_INTEGRITY_CONFLICT",
       );
+    const modelConfigCount = (
+      this.connection
+        .prepare("SELECT COUNT(*) AS count FROM model_configs")
+        .get() as { count: number }
+    ).count;
+    if (modelConfigCount < 5)
+      throw this.schemaConflict(
+        SUPPORTED_SCHEMA_REVISION,
+        "恢复五类领域的 model_configs 配置行后重试",
+        "SCHEMA_INTEGRITY_CONFLICT",
+      );
     const artifactVersionColumns = this.connection
       .prepare("PRAGMA table_info(artifact_versions)")
       .all() as { name: string }[];
@@ -821,11 +886,43 @@ export class Database {
     const attemptColumns = this.connection
       .prepare("PRAGMA table_info(execution_attempts)")
       .all() as { name: string }[];
-    for (const column of ["role_version", "policy_snapshot_json"])
+    for (const column of [
+      "role_version",
+      "policy_snapshot_json",
+      "model_domain",
+      "model_provider",
+      "model_name",
+      "model_secret_ref",
+      "model_timeout_ms",
+      "model_retry_max_attempts",
+    ])
       if (!attemptColumns.some((item) => item.name === column))
         throw this.schemaConflict(
           SUPPORTED_SCHEMA_REVISION,
           `恢复 execution_attempts.${column} 后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    const modelCallColumns = this.connection
+      .prepare("PRAGMA table_info(model_calls)")
+      .all() as { name: string }[];
+    for (const column of [
+      "domain",
+      "config_version",
+      "span_id",
+      "input_summary",
+      "output_summary",
+      "timeout_ms",
+      "timed_out",
+      "retry_count",
+      "artifact_ref",
+      "redaction_status",
+      "final_status",
+      "total_tokens",
+    ])
+      if (!modelCallColumns.some((item) => item.name === column))
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 model_calls.${column} 后重试`,
           "SCHEMA_INTEGRITY_CONFLICT",
         );
     const triggers = this.connection
@@ -905,6 +1002,26 @@ export class Database {
         throw this.schemaConflict(
           SUPPORTED_SCHEMA_REVISION,
           `恢复工作流并发约束索引 ${index} 后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const [table, index, columns] of MODEL_GATEWAY_INDEX_DEFINITIONS) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      const actualColumns = (
+        this.connection.prepare(`PRAGMA index_info(${index})`).all() as {
+          seq: number;
+          name: string;
+        }[]
+      )
+        .sort((left, right) => left.seq - right.seq)
+        .map((column) => column.name)
+        .join(",");
+      if (!found || actualColumns !== columns)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 ${table} 的 Task 5 查询索引 ${index} 后重试`,
           "SCHEMA_INTEGRITY_CONFLICT",
         );
     }
