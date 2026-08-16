@@ -191,3 +191,16 @@ export class PolicyDeniedError extends DomainError {
     super(message, options, { code: "POLICY_DENIED", statusCode: 403 });
   }
 }
+
+/** 使用固定错误码表示状态机拒绝了跨越关卡或非法状态变化。 */
+export class WorkflowGuardBlockedError extends DomainError {
+  constructor(
+    message = "工作流门禁阻止了当前状态变化",
+    options?: DomainErrorOptions,
+  ) {
+    super(message, options, {
+      code: "WORKFLOW_GUARD_BLOCKED",
+      statusCode: 409,
+    });
+  }
+}

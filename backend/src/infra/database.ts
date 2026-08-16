@@ -25,13 +25,18 @@ import {
   migrateIntegritySchema,
   migrateOrganizationSchema,
   migrateRuntimeSchema,
+  migrateWorkflowHardeningSchema,
   ORGANIZATION_INDEX_DEFINITIONS,
+  WORKFLOW_INDEX_DEFINITIONS,
+  WORKFLOW_REQUIRED_INDEX_NAMES,
   ORGANIZATION_TABLES,
+  WORKFLOW_TABLES,
   DOMAIN_TABLES,
   RUNTIME_TABLES,
   PROJECT_ID_INDEX_NAMES,
   renderImmutableTrigger,
   renderTraceLinkTrigger,
+  migrateWorkflowSchema,
 } from "./schema.js";
 
 /** 迁移前置备份上下文；仅批准回执才能解除 0001 -> 0002 阻断。 */
@@ -172,6 +177,8 @@ export class Database {
         migrateDomainSchema(this.connection);
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
+        migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0001_runtime_skeleton") {
         const callback =
           backupCallback ??
@@ -195,6 +202,8 @@ export class Database {
         migrateDomainSchema(this.connection);
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
+        migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0002_task2_domain_foundation") {
         const callback =
           backupCallback ??
@@ -217,6 +226,8 @@ export class Database {
           );
         migrateIntegritySchema(this.connection);
         migrateOrganizationSchema(this.connection);
+        migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === "0003_task2_integrity_trace_fix") {
         const callback =
           backupCallback ??
@@ -238,12 +249,57 @@ export class Database {
             "修复迁移前一致性备份并重新执行批准的 Schema migration",
           );
         migrateOrganizationSchema(this.connection);
+        migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
+      } else if (current === "0004_task3_organization_policy") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateWorkflowSchema(this.connection);
+        migrateWorkflowHardeningSchema(this.connection);
+      } else if (current === "0005_task4_workflow") {
+        const callback =
+          backupCallback ??
+          ((context) => this.createPreMigrationBackup(context));
+        const receipt = callback({
+          persistentRoot: this.persistentRoot,
+          databasePath: this.path,
+          appVersion: this.appVersion,
+          sourceSchemaRevision: current,
+          targetSchemaRevision: SUPPORTED_SCHEMA_REVISION,
+        });
+        if (
+          !receipt.verified ||
+          receipt.sourceSchemaRevision !== current ||
+          receipt.targetSchemaRevision !== SUPPORTED_SCHEMA_REVISION
+        )
+          throw this.persistenceError(
+            "MIGRATION_BACKUP_FAILED",
+            "修复迁移前一致性备份并重新执行批准的 Schema migration",
+          );
+        migrateWorkflowHardeningSchema(this.connection);
       } else if (current === SUPPORTED_SCHEMA_REVISION) {
         this.ensureSchemaContract();
       } else {
         throw this.schemaConflict(
           current,
-          "备份持久化根目录并沿批准路径升级到 0004_task3_organization_policy",
+          "备份持久化根目录并沿批准路径升级到 0006_task4_workflow_hardening",
         );
       }
       this.connection.pragma("journal_mode = WAL");
@@ -494,6 +550,11 @@ export class Database {
         "outbox_messages",
         "notifications",
         "trace_links",
+        "workflow_checkpoints",
+        "workflow_risks",
+        "workflow_leases",
+        "workflow_pauses",
+        "termination_confirmations",
         "tool_calls",
         "model_calls",
         "execution_attempts",
@@ -550,6 +611,7 @@ export class Database {
       ...RUNTIME_TABLES,
       ...DOMAIN_TABLES,
       ...ORGANIZATION_TABLES,
+      ...WORKFLOW_TABLES,
       "drizzle_migrations",
     ]);
     if (![...required].every((name) => tables.has(name)))
@@ -639,6 +701,80 @@ export class Database {
         "trace_id",
         "action_json",
         "created_at",
+      ],
+      workflow_pauses: [
+        "id",
+        "project_id",
+        "reason",
+        "impact_scope_json",
+        "waiting_for",
+        "available_actions_json",
+        "recovery_condition",
+        "previous_status",
+        "previous_stage",
+        "status",
+        "created_at",
+        "resolved_at",
+        "resolved_by",
+        "version",
+      ],
+      workflow_leases: [
+        "id",
+        "project_id",
+        "task_id",
+        "attempt_id",
+        "role_id",
+        "task_version",
+        "workspace_ref",
+        "trace_id",
+        "acquired_at",
+        "heartbeat_at",
+        "expires_at",
+        "grant_expires_at",
+        "status",
+        "release_result",
+        "version",
+      ],
+      workflow_risks: [
+        "id",
+        "project_id",
+        "task_id",
+        "severity",
+        "reason",
+        "impact_scope_json",
+        "evidence_json",
+        "recommendation",
+        "status",
+        "approval_id",
+        "response_task_id",
+        "created_at",
+        "resolved_at",
+        "version",
+      ],
+      workflow_checkpoints: [
+        "id",
+        "project_id",
+        "task_id",
+        "attempt_id",
+        "project_status",
+        "project_stage",
+        "state_json",
+        "reason",
+        "created_at",
+        "version",
+      ],
+      termination_confirmations: [
+        "id",
+        "project_id",
+        "token_hash",
+        "reason",
+        "expected_version",
+        "actor_id",
+        "status",
+        "created_at",
+        "expires_at",
+        "confirmed_at",
+        "version",
       ],
     };
     for (const [table, columns] of Object.entries(requiredColumns))
@@ -738,6 +874,37 @@ export class Database {
         throw this.schemaConflict(
           SUPPORTED_SCHEMA_REVISION,
           `恢复 ${table} 的 Task 3 查询索引后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const [table, index, columns] of WORKFLOW_INDEX_DEFINITIONS) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      const actualColumns = (
+        this.connection.prepare(`PRAGMA index_info(${index})`).all() as {
+          seq: number;
+          name: string;
+        }[]
+      )
+        .sort((left, right) => left.seq - right.seq)
+        .map((column) => column.name)
+        .join(",");
+      if (!found || actualColumns !== columns)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复 ${table} 的 Task 4 查询索引后重试`,
+          "SCHEMA_INTEGRITY_CONFLICT",
+        );
+    }
+    for (const index of WORKFLOW_REQUIRED_INDEX_NAMES) {
+      const found = this.connection
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?")
+        .get(index);
+      if (!found)
+        throw this.schemaConflict(
+          SUPPORTED_SCHEMA_REVISION,
+          `恢复工作流并发约束索引 ${index} 后重试`,
           "SCHEMA_INTEGRITY_CONFLICT",
         );
     }

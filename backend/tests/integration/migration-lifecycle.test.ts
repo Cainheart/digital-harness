@@ -61,6 +61,39 @@ describe("migration, schema guard and lifecycle", () => {
     second.close();
   });
 
+  it("upgrades a Task 4 database with the workflow hardening columns missing", () => {
+    const root = useTestRoot();
+    const first = new Database(join(root, "company.db"), {
+      persistentRoot: root,
+    });
+    first.initialize();
+    first.connection.exec(
+      "ALTER TABLE workflow_leases DROP COLUMN grant_expires_at; ALTER TABLE workflow_risks DROP COLUMN response_task_id; UPDATE drizzle_migrations SET version_num='0005_task4_workflow'",
+    );
+    first.close();
+
+    const second = new Database(join(root, "company.db"), {
+      persistentRoot: root,
+    });
+    second.initialize();
+    expect(second.currentRevision()).toBe(SUPPORTED_SCHEMA_REVISION);
+    expect(
+      (
+        second.connection
+          .prepare("PRAGMA table_info(workflow_leases)")
+          .all() as { name: string }[]
+      ).some((column) => column.name === "grant_expires_at"),
+    ).toBe(true);
+    expect(
+      (
+        second.connection
+          .prepare("PRAGMA table_info(workflow_risks)")
+          .all() as { name: string }[]
+      ).some((column) => column.name === "response_task_id"),
+    ).toBe(true);
+    second.close();
+  });
+
   it("blocks a structurally incomplete database without treating it as ready", () => {
     const root = useTestRoot();
     const database = new Database(join(root, "company.db"), {

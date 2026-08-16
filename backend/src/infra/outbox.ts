@@ -28,9 +28,12 @@ export class OutboxRepository {
       topic: string;
       payload: Record<string, unknown>;
       availableAt?: string | null;
+      /** 终态转换的事件在状态提交后入 Outbox，仍受上层状态机和事务保护。 */
+      allowReadOnlyProject?: boolean;
     },
   ): OutboxMessage {
-    if (input.projectId) ensureProjectWritable(connection, input.projectId);
+    if (input.projectId && !input.allowReadOnlyProject)
+      ensureProjectWritable(connection, input.projectId);
     const message: OutboxMessage = {
       id: newObjectId("outbox"),
       projectId: input.projectId ?? null,
